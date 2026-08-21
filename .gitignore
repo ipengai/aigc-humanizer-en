@@ -35,3 +35,7 @@ test/
 
 # 日志（API 调用记录、检测结果等）
 logs/
+
+# macOS 与本地迁移备份
+.DS_Store
+bakup/

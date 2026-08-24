@@ -49,10 +49,12 @@ def get_db():
 
 
 def login_required(f):
-    """Decorator: redirect to login if not authenticated."""
+    """Decorator: redirect to login if not authenticated; API routes get JSON 401 instead of HTML redirect."""
     @wraps(f)
     def decorated(*args, **kwargs):
         if not session.get('admin_authenticated'):
+            if request.path.startswith('/admin/api/'):
+                return jsonify({'error': '未登录或会话已过期，请重新登录'}), 401
             return redirect(url_for('login'))
         return f(*args, **kwargs)
     return decorated
@@ -723,7 +725,6 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
     <div class="header">
         <h1>📊 管理后台</h1>
         <div class="header-right">
-            <a href="/orders" target="_blank">用户端 →</a>
             <button class="btn-logout" onclick="location.href='/admin/logout'">退出登录</button>
         </div>
     </div>

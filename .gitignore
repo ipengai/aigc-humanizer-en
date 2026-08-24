@@ -32,6 +32,9 @@ config.py
 .obsidian/
 .gstack/
 test/
+!test/
+test/*
+!test/export_docx_segment_details.py
 
 # 日志（API 调用记录、检测结果等）
 logs/

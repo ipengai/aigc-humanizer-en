@@ -40,6 +40,9 @@ REWRITE_MODE_DEFAULT = 'median'    # 默认改写模式：low=逐段 / median=�
 REWRITE_MEDIAN_PARAS = 3           # median 模式最多聚合的连续正文段数（=1 时等价于 low）
 REWRITE_HIGH_PARAS = 5             # high 模式最多聚合的连续正文段数（=1 时等价于 low）
 REWRITE_MAX_WORDS = 2000           # 单次改写请求的最大字数上限（聚合超过即切新 part）
+REWRITE_MIN_CHARS = 300            # 聚合块最小字符数；不足时允许超过 mode 的段数软上限
+REWRITE_PROTECT_SHORT_PARAGRAPHS = False  # 无标题格式文档中是否把短正文当作疑似标题保护
+REWRITE_PROTECT_SHORT_LISTS = False       # 是否保护短列表；False 时强制并入上一正文块
 RATE_LIMIT_MAX_REQUESTS = 30       # 改写请求数超过该值则启用 sleep 频控（防超 60 次/分钟）
 RATE_LIMIT_SLEEP = 1.0             # 频控时每次改写请求后的 sleep 秒数（60 次/分钟 → 间隔≥1s）
 HUMANIZER_GLOBAL_MAX_CONCURRENCY = 2

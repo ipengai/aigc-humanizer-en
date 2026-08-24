@@ -82,8 +82,9 @@ class AITextHumanizer(HumanizerAdapter):
 
         When ``paragraphs`` (an ORDERED list of paragraph dicts from
         extract_text) is provided, the document is segmented by ``mode`` and
-        only body paragraphs are sent to the API. Headings / references / short
-        paragraphs are kept as-is and the output preserves document structure.
+        only body paragraphs are sent to the API. Headings and references are
+        kept as-is; short-paragraph handling is configurable and the output
+        preserves document structure.
 
         ``mode`` controls the segmentation granularity:
             - low    : send each body paragraph individually (compat: paragraph)
@@ -112,7 +113,7 @@ class AITextHumanizer(HumanizerAdapter):
         Humanize text via ai-text-humanizer.com API, returning structured output.
 
         返回 (text_str, structured_paragraphs)。有段落结构时按 mode 分段改写，
-        保护标题、参考文献和短段，并记录输出结构供下载 Word 回填。
+        保护标题和参考文献，按配置处理短段，并记录输出结构供下载 Word 回填。
         无段落结构时对整篇改写（structured 为空列表）。mode 缺省取默认。
 
         Args:
@@ -148,6 +149,19 @@ class AITextHumanizer(HumanizerAdapter):
         Returns:
             (success: bool, result: str)
         """
+        input_chars = len((text or "").strip())
+        min_chars = int(_cfg("REWRITE_MIN_CHARS", 300))
+        if min_chars > 0 and input_chars < min_chars:
+            logger.warning(
+                "rewrite stage=rewrite backend=%s action=skip_too_short "
+                "chars=%d min_chars=%d",
+                self.backend_label, input_chars, min_chars,
+            )
+            return False, (
+                f"Text block is too short for upstream API: "
+                f"{input_chars} chars, minimum {min_chars}"
+            )
+
         circuit_open, remaining = self._circuit_is_open()
         if circuit_open:
             logger.error(

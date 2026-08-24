@@ -8,10 +8,10 @@
 |------|------|
 | AI 文本检测 | 支持规则检测、Sapling、Originality 及 Mock 适配器 |
 | 降 AI 改写 | 支持 DeepSeek/OpenCode、付费 API 与本地规则，提供 low / median / high 三种聚合粒度 |
-| 主备容灾 | 主改写服务失败后自动切换备用服务，公共切块与进程级限流保护上游 API |
+| 主备容灾 | 每个改写块都优先调用主服务；当前块失败才调用备用服务，下一块重新尝试主服务 |
 | 异步处理 | 后台执行改写与复检，前端展示真实处理进度 |
 | 多格式支持 | 上传 `.docx`、`.pdf`、`.txt`、`.md`，按文件类型生成下载结果 |
-| Word 格式回填 | 基于原文副本和 `node_id` 定位替换正文，尽量保留原始样式 |
+| Word 格式回填 | 基于原文副本和 `source_body_indexes` 定位替换正文，尽量保留原始样式 |
 | 订单与余额 | 历史订单、结果下载、词数余额、充值和激活码兑换 |
 | 支付宝支付 | 当面付二维码、异步通知及支付状态查询 |
 
@@ -50,14 +50,21 @@ cp config.example.py config.py
 - 流程测试：使用 `sapling_mock`、`rule_based_mock` 或 `ai_text_humanizer_mock`
 - 线上生产：`AI_DETECTOR_ADAPTER='sapling'`、`HUMANIZER_ADAPTER='ai_text_humanizer'`（付费服务）或 `llm_based`（OpenCode/DeepSeek）、`PAYMENT_ADAPTER='alipay'`
 
-大模型作为主服务、付费 API 作为备用服务的示例：
+付费 API 作为主服务、DeepSeek 作为备用服务的示例：
 
 ```python
-HUMANIZER_ADAPTER = 'llm_based'
-HUMANIZER_FALLBACK_ADAPTER = 'ai_text_humanizer'
+HUMANIZER_ADAPTER = 'ai_text_humanizer'
+HUMANIZER_FALLBACK_ADAPTER = 'llm_based'
 LLM_PROVIDER = 'deepseek'  # deepseek | opencode
 LLM_API_KEY = 'your-api-key'
 LLM_MODEL = ''             # 留空时使用 Provider 默认模型
+
+REWRITE_MEDIAN_PARAS = 3
+REWRITE_HIGH_PARAS = 5
+REWRITE_MIN_CHARS = 300
+REWRITE_MAX_WORDS = 2000
+REWRITE_PROTECT_SHORT_PARAGRAPHS = False
+REWRITE_PROTECT_SHORT_LISTS = False
 ```
 
 生产环境还需设置 `PAYMENT_ADAPTER='alipay'`、`ALLOW_MOCK_PAYMENT=False`。文档正文会发送给所选改写供应商处理，部署前应核对供应商的数据使用和保留政策。
@@ -79,6 +86,70 @@ python3 app.py
 3. 选择改写粒度并提交改写；余额不足时先完成充值。
 4. 等待后台改写和复检完成，查看前后对比并下载结果。
 
+## 文档处理流程
+
+结构化文件的主链路如下：
+
+```text
+原始文件 → 有序结构节点 → 改写任务块 → 主服务/单块兜底 → 结构化结果 → 原文件位置回填
+```
+
+### 1. 原始内容如何解析
+
+上传文件统一由 `app/text_extract` 按原始顺序解析，返回节点列表。每个文本节点至少包含 `text`、`word_count`、`node_id`、`content_index` 和 `source_format`；能取得源位置时，还会记录 `paragraph_index`、`body_index`、Word 样式、标题标记、列表标记等信息。这些稳定标识用于后续聚合和结果回填，不能在中途重新编号。
+
+DOCX 按 Word 文档 Body 中的真实顺序遍历段落和表格：
+
+- 普通段落保留 `style`、`is_heading`、`word_count` 和原始 `body_index`。
+- Word 编号和项目符号解析为 `list_text`、`list_level`、`indent` 元数据。
+- `Heading`、`Title`、`TOC` 样式会标记为标题；`References` 等标题后的内容标记为参考文献，直到遇到下一个标题。
+- 含图片或超链接的文本段会增加保护标记。
+- 表格目前只生成保持原位置的占位节点，不提取或改写单元格文字，也不计入检测和改写词数。下载 DOCX 时，原表格依靠源文件副本保留。
+
+PDF、Markdown、TXT 也会整理为同一套有序节点；但只有 DOCX 能利用原始 `body_index` 在源文件副本中做精确位置替换。直接粘贴的文本当前只保存为完整字符串，没有 Word 样式和原始节点结构，因此走整段/通用切块流程。
+
+首次 AI 检测不经过段落聚合器：系统把所有带 `text` 的已解析节点按顺序拼成全文后检测。表格占位等没有 `text` 的节点不会进入检测。
+
+### 2. 解析后如何聚合段落
+
+聚合前先判断整篇解析结果是否存在 `is_heading=True` 的标题信息，然后确定哪些节点需要保护：
+
+- 标题、参考文献、代码块、含图片段和含超链接段始终原样保护，不发送给改写服务。
+- 表格占位不发送给改写服务；当前实现也不打断表格前后正文的聚合。
+- 普通短段默认仍是正文。只有文档完全没有标题信息，并且 `REWRITE_PROTECT_SHORT_PARAGRAPHS=True` 时，才启用少于 `min_words` 的无格式文档标题兜底。
+- 短列表使用独立开关。默认 `REWRITE_PROTECT_SHORT_LISTS=False`，短列表会参与改写；有前置正文时强制黏到前面的正文块，不因段落数软上限单独切块。
+
+正文节点按 mode 生成改写任务：
+
+| mode | 基础粒度 | 最小字符规则 |
+|------|----------|--------------|
+| `low` | 原则上每个正文段单独一块；连续短列表仍黏到上一段 | 不为满足300字符主动跨段聚合；不足300字符由 API 调用前检查和备用服务处理 |
+| `median` | 期望每块最多3个正文段 | 3段不足 `REWRITE_MIN_CHARS` 时继续加入第4、5段，直到达到最小字符数 |
+| `high` | 期望每块最多5个正文段 | 5段不足最小字符数时继续聚合 |
+
+`REWRITE_MEDIAN_PARAS` 和 `REWRITE_HIGH_PARAS` 是软上限，默认分别为3和5；`REWRITE_MIN_CHARS=300` 是上游请求的最小字符目标；`REWRITE_MAX_WORDS=2000` 是不能突破的硬上限。连续正文区域末尾若留下不足300字符的小块，会在不突破最大词数的前提下向前并入上一改写块。
+
+标题、参考文献等保护节点仍是结构硬边界。如果一个标题章节内的全部正文仍不足300字符，系统不会为了凑长度跨标题改写：付费 API 会在联网前拒绝发送这个短块；配置了备用服务时，仅当前短块由备用服务处理，下一块仍重新优先尝试主服务。
+
+每个任务最终记录独立的 `task_id`；改写任务还记录 `block_id`、`source_node_ids` 和 `source_body_indexes`。主服务在第 N 块失败时，前 N-1 块结果保留，备用服务只处理第 N 块；第 N+1 块再次优先尝试主服务。结构化文件不会再从第1块重跑；没有段落结构的纯粘贴文本暂时仍只能进行整篇主备切换。
+
+### 3. 改写后如何拼接回结果
+
+改写过程始终按任务顺序生成两份结果：
+
+- 展示文本：改写块结果和受保护原文依次加入 `parts`，最后使用两个换行符拼成完整文本。
+- 结构化结果：每个改写块保存改写文本、`block_id`、对应的 `source_node_ids` 和 `source_body_indexes`；受保护段保存原文、标题级别和原样式。
+
+DOCX 下载不是从零创建文档，而是复制原始 Word 后只替换被改写的正文范围：
+
+1. 根据 `source_body_indexes` 找到每个改写块对应的原始段落。
+2. 从文档尾部向前替换，避免前面删除或插入段落后导致后续位置偏移。
+3. 改写结果按空行重新拆成输出段落，并尽量一一写回原始段落，保留原段落属性和已有 run 格式。
+4. 如果输出段落比原范围少，删除多余的原正文段；如果更多，则复制最后一个源段落样式后插入新段。
+5. 标题、参考文献、表格、图片等未进入改写任务的内容不执行替换，因此继续保留在原位置。
+
+如果 DOCX 源文件副本不可用，系统根据结构化结果重新生成 DOCX；PDF 输入也输出这种重建的 DOCX，可以恢复已识别的标题级别和正文顺序，但不能完整还原原版式。TXT 和 Markdown 则直接按最终展示文本输出对应文本文件。
+
 ## 文档
 
 - [技术方案](docs/技术方案.md)：系统架构、模块划分、数据模型、接口、核心流程、配置和扩展方式。
@@ -91,7 +162,7 @@ python3 app.py
 ### 改写效果与检测成本
 
 - [ ] **P0 - 高 AI 率自动定向二次改写**：改写结果不达标时，自动定位并二次改写高风险内容；成本控制方案见[技术方案](docs/技术方案.md#111-p0-高-ai-率自动定向二次改写)。
-- [x] **P0 - 改写上游自动兜底**：主改写 API 失败后自动切换独立备用服务，前端不暴露供应商故障信息。
+- [x] **P0 - 改写上游自动兜底**：每块优先调用主改写 API，失败时仅当前块调用独立备用服务，下一块恢复主服务优先；已完成结果不重跑。
 - [ ] **P1 - 改写故障告警**：主服务切换、主备全部失败及服务恢复时发送飞书通知；主备全部失败时增加电话加急。
 - [x] **P1 - 超长单句处理**：单句超过上游词数限制时按词安全切块。
 - [x] **P1 - 改写 API 进程级全局频控**：限制当前进程内跨订单、跨线程的最大并发数和请求启动间隔；多 worker 部署后迁移到 Redis 分布式限流。

@@ -20,10 +20,7 @@ from app.ai_detector.rule_based import analyze_text as _rule_detect
 
 
 def _make_api_detect(backend: str):
-    """
-    API 检测 + 规则子评分 = 混合模式。
-    主分用 API，子分（perplexity / 句式 / 可读性等）仍用规则。
-    """
+    """Use the configured API detector, falling back to local rules on errors."""
     def _detect(text: str, stage: str = "analyze") -> dict:
         import logging
         _logger = logging.getLogger("app.ai_detector.adapter")
@@ -36,18 +33,13 @@ def _make_api_detect(backend: str):
             )
             # API 失败/超时时降级到规则，但保留规则的真实结果，
             # 不覆盖成 API 的占位值（ai_score=50 / Unknown），避免误导用户。
-            rule = _rule_detect(text)
+            rule = _rule_detect(text, stage=stage)
             rule["backend"] = f"{backend}_fallback"
             rule["error"] = api.get("error", "unknown")
             return rule
         _logger.info("detect stage=%s backend=%s action=ok ai_score=%.1f",
                      stage, backend, api.get("ai_score", 0))
-        rule = _rule_detect(text)
-        rule["ai_score"] = api["ai_score"]
-        rule["risk_level"] = api["risk_level"]
-        rule["risk_description"] = api["risk_description"]
-        rule["backend"] = backend
-        return rule
+        return api
     return _detect
 
 
@@ -63,7 +55,7 @@ def _make_mock_detect(label: str):
         _logger.info("detect stage=%s backend=%s_mock action=start chars=%d sleep=%.2fs",
                      stage, label, len(text), duration)
         time.sleep(duration)
-        rule = _rule_detect(text)
+        rule = _rule_detect(text, stage=stage)
         rule["backend"] = f"{label}_mock"
         rule["mock"] = True
         _logger.info("detect stage=%s backend=%s_mock action=done ai_score=%.1f elapsed=%.0fms",

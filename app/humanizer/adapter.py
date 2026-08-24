@@ -68,7 +68,7 @@ class HumanizerAdapter(ABC):
 
     def _humanize_segmented(self, mode, paragraphs, block_rewriter):
         """
-        按段落结构分段改写，保护标题、参考文献和短段，保持原文顺序。
+        按段落结构分段改写，保护标题和参考文献，并按配置处理短段，保持原文顺序。
 
         通用骨架，供各引擎复用。改写正文块的具体逻辑由 block_rewriter 提供：
             block_rewriter(body_text) -> str
@@ -83,7 +83,10 @@ class HumanizerAdapter(ABC):
         text, _ = self._humanize_segmented_structured(mode, paragraphs, block_rewriter)
         return text
 
-    def _humanize_segmented_structured(self, mode, paragraphs, block_rewriter, progress_cb=None):
+    def _humanize_segmented_structured(
+        self, mode, paragraphs, block_rewriter, progress_cb=None,
+        fallback_rewriter=None, primary_label=None, fallback_label=None,
+    ):
         """
         分段改写并返回结构化结果：(text_str, structured_paragraphs)。
 
@@ -99,6 +102,8 @@ class HumanizerAdapter(ABC):
         Args:
             progress_cb: 可选进度回调 progress_cb(stage, block, total_blocks)，
                 每个 rewrite 块完成后调用，用于前端展示"改写 x/total"真实进度。
+            fallback_rewriter: 可选的单块备用改写回调。主回调抛异常时，
+                仅使用备用回调处理当前块；下一块仍重新调用主回调。
         """
         _start = time.time()
         tasks = segment_paragraphs(
@@ -107,6 +112,11 @@ class HumanizerAdapter(ABC):
             median_paras=_cfg('REWRITE_MEDIAN_PARAS', 3),
             high_paras=_cfg('REWRITE_HIGH_PARAS', 5),
             max_words=_cfg('REWRITE_MAX_WORDS', 2000),
+            min_chars=_cfg('REWRITE_MIN_CHARS', 300),
+            protect_short_paragraphs=_cfg(
+                'REWRITE_PROTECT_SHORT_PARAGRAPHS', False
+            ),
+            protect_short_lists=_cfg('REWRITE_PROTECT_SHORT_LISTS', False),
         )
 
         parts = []
@@ -128,7 +138,33 @@ class HumanizerAdapter(ABC):
         for i, task in enumerate(tasks):
             if task["type"] == "rewrite":
                 block_text = task["text"]
-                rewritten = block_rewriter(block_text)
+                current_block = rewrite_idx + 1
+                try:
+                    # 每个块都重新优先调用主改写服务。
+                    rewritten = block_rewriter(block_text)
+                except Exception:
+                    if fallback_rewriter is None:
+                        raise
+                    logger.exception(
+                        "Primary humanizer %s failed at block=%d; "
+                        "using %s for current block",
+                        primary_label or "primary", current_block,
+                        fallback_label or "fallback",
+                    )
+                    if progress_cb:
+                        progress_cb(
+                            stage="rewrite",
+                            block=current_block,
+                            total_blocks=len(rewrite_tasks),
+                            message=f"第{current_block}块使用备用改写服务",
+                        )
+                    try:
+                        # 只兜底当前块；循环进入下一块后仍先执行上面的主调用。
+                        rewritten = fallback_rewriter(block_text)
+                    except Exception as fallback_error:
+                        raise RuntimeError(
+                            f"备用改写服务在第{current_block}块不可用"
+                        ) from fallback_error
                 source_paragraphs = task.get("paragraphs") or []
                 parts.append(rewritten)
                 # 进度回调：每完成一个改写块上报（block 从 1 开始）

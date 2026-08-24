@@ -537,7 +537,7 @@
     <!-- QR Code rendering library (with CDN fallback) -->
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"
         onerror="console.warn('QR CDN failed to load');document.getElementById('qrcode-container')&&(document.getElementById('qrcode-container').innerHTML='<a href=\'#\' style=\'color:#4f46e5;font-size:0.85rem;\'>二维码加载失败，请刷新重试</a>');"></script>
-    <script src="{{ url_for('static', filename='common.js') }}"></script>
+    <script src="{{ url_for('static', filename='common.js', v='20260824-1') }}"></script>
     <script src="{{ url_for('static', filename='auth.js') }}"></script>
     <script src="{{ url_for('static', filename='payment.js') }}"></script>
     <script src="{{ url_for('static', filename='main.js') }}"></script>

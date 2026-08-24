@@ -88,9 +88,174 @@ let _rewriteNewText = '';
  * Returns array of { type: 'added'|'deleted'|'unchanged', text: string }
  */
 function computeWordDiff(original, modified) {
-    // Tokenize into words + spaces/punctuation
+    // Attach trailing whitespace to each word. This preserves the rewritten
+    // layout while keeping the LCS dimension close to the real word count
+    // instead of doubling it with separate whitespace tokens.
     function tokenize(text) {
-        return text.match(/\S+|\s+/g) || [];
+        if (!text) return [];
+        const tokens = [];
+        const leading = text.match(/^\s+/)?.[0] || '';
+        if (leading) {
+            tokens.push({ text: leading, key: leading });
+        }
+        const remainder = text.slice(leading.length);
+        for (const match of remainder.matchAll(/\S+\s*/g)) {
+            tokens.push({ text: match[0], key: match[0].trimEnd() });
+        }
+        return tokens;
+    }
+
+    function tokensEqual(left, right) {
+        return left.key === right.key;
+    }
+
+    function appendDiff(result, type, text) {
+        if (!text) return;
+        const previous = result[result.length - 1];
+        if (previous && previous.type === type) {
+            previous.text += text;
+        } else {
+            result.push({ type, text });
+        }
+    }
+
+    function buildDiffFromMatches(origTokens, newTokens, matches) {
+        const result = [];
+        let origIndex = 0;
+        let newIndex = 0;
+
+        for (const [matchedOrig, matchedNew] of matches) {
+            while (origIndex < matchedOrig) {
+                appendDiff(result, 'deleted', origTokens[origIndex++].text);
+            }
+            while (newIndex < matchedNew) {
+                appendDiff(result, 'added', newTokens[newIndex++].text);
+            }
+            appendDiff(result, 'unchanged', newTokens[matchedNew].text);
+            origIndex = matchedOrig + 1;
+            newIndex = matchedNew + 1;
+        }
+        while (origIndex < origTokens.length) {
+            appendDiff(result, 'deleted', origTokens[origIndex++].text);
+        }
+        while (newIndex < newTokens.length) {
+            appendDiff(result, 'added', newTokens[newIndex++].text);
+        }
+        return result;
+    }
+
+    // Return LCS lengths for A[aStart:aEnd] against every prefix of
+    // B[bStart:bEnd], using O(B) memory.
+    function forwardLengths(a, aStart, aEnd, b, bStart, bEnd) {
+        const width = bEnd - bStart;
+        let previous = new Uint32Array(width + 1);
+        let current = new Uint32Array(width + 1);
+        for (let i = aStart; i < aEnd; i++) {
+            current[0] = 0;
+            for (let j = 1; j <= width; j++) {
+                current[j] = tokensEqual(a[i], b[bStart + j - 1])
+                    ? previous[j - 1] + 1
+                    : Math.max(previous[j], current[j - 1]);
+            }
+            [previous, current] = [current, previous];
+        }
+        return previous;
+    }
+
+    // Same calculation from the end. result[k] is the LCS length against the
+    // last k tokens of B, which lets Hirschberg select a split point.
+    function reverseLengths(a, aStart, aEnd, b, bStart, bEnd) {
+        const width = bEnd - bStart;
+        let previous = new Uint32Array(width + 1);
+        let current = new Uint32Array(width + 1);
+        for (let i = aEnd - 1; i >= aStart; i--) {
+            current[0] = 0;
+            for (let j = 1; j <= width; j++) {
+                current[j] = tokensEqual(a[i], b[bEnd - j])
+                    ? previous[j - 1] + 1
+                    : Math.max(previous[j], current[j - 1]);
+            }
+            [previous, current] = [current, previous];
+        }
+        return previous;
+    }
+
+    // Hirschberg reconstructs the LCS with linear memory. The previous
+    // implementation allocated an m*n table and silently disabled diff above
+    // 3000 tokens, which made the UI toggle appear broken for normal DOCX files.
+    function collectMatches(a, aStart, aEnd, b, bStart, bEnd, matches) {
+        if (aStart >= aEnd || bStart >= bEnd) return;
+        if (aEnd - aStart === 1) {
+            for (let j = bStart; j < bEnd; j++) {
+                if (tokensEqual(a[aStart], b[j])) {
+                    matches.push([aStart, j]);
+                    break;
+                }
+            }
+            return;
+        }
+
+        const aMiddle = Math.floor((aStart + aEnd) / 2);
+        const left = forwardLengths(a, aStart, aMiddle, b, bStart, bEnd);
+        const right = reverseLengths(a, aMiddle, aEnd, b, bStart, bEnd);
+        const width = bEnd - bStart;
+        let bestOffset = 0;
+        let bestLength = -1;
+        for (let offset = 0; offset <= width; offset++) {
+            const length = left[offset] + right[width - offset];
+            if (length > bestLength) {
+                bestLength = length;
+                bestOffset = offset;
+            }
+        }
+
+        const bMiddle = bStart + bestOffset;
+        collectMatches(a, aStart, aMiddle, b, bStart, bMiddle, matches);
+        collectMatches(a, aMiddle, aEnd, b, bMiddle, bEnd, matches);
+    }
+
+    function coarseDiff(origTokens, newTokens) {
+        let prefix = 0;
+        while (prefix < origTokens.length && prefix < newTokens.length &&
+               tokensEqual(origTokens[prefix], newTokens[prefix])) {
+            prefix++;
+        }
+        let suffix = 0;
+        while (suffix < origTokens.length - prefix &&
+               suffix < newTokens.length - prefix &&
+               tokensEqual(
+                   origTokens[origTokens.length - 1 - suffix],
+                   newTokens[newTokens.length - 1 - suffix]
+               )) {
+            suffix++;
+        }
+
+        const result = [];
+        appendDiff(
+            result,
+            'unchanged',
+            newTokens.slice(0, prefix).map(token => token.text).join('')
+        );
+        appendDiff(
+            result,
+            'deleted',
+            origTokens.slice(prefix, origTokens.length - suffix)
+                .map(token => token.text).join('')
+        );
+        appendDiff(
+            result,
+            'added',
+            newTokens.slice(prefix, newTokens.length - suffix)
+                .map(token => token.text).join('')
+        );
+        if (suffix) {
+            appendDiff(
+                result,
+                'unchanged',
+                newTokens.slice(-suffix).map(token => token.text).join('')
+            );
+        }
+        return result;
     }
 
     const origTokens = tokenize(original);
@@ -98,44 +263,17 @@ function computeWordDiff(original, modified) {
     const m = origTokens.length;
     const n = newTokens.length;
 
-    // LCS DP (limit size to avoid performance issues on very long texts)
-    const MAX_LCS = 3000;
-    let useLCS = m <= MAX_LCS && n <= MAX_LCS;
-
-    if (useLCS) {
-        // Build LCS table
-        const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
-        for (let i = 1; i <= m; i++) {
-            for (let j = 1; j <= n; j++) {
-                if (origTokens[i - 1] === newTokens[j - 1]) {
-                    dp[i][j] = dp[i - 1][j - 1] + 1;
-                } else {
-                    dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-                }
-            }
-        }
-
-        // Backtrack to produce diff
-        const result = [];
-        let i = m, j = n;
-        while (i > 0 || j > 0) {
-            if (i > 0 && j > 0 && origTokens[i - 1] === newTokens[j - 1]) {
-                result.push({ type: 'unchanged', text: origTokens[i - 1] });
-                i--; j--;
-            } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-                result.push({ type: 'added', text: newTokens[j - 1] });
-                j--;
-            } else {
-                result.push({ type: 'deleted', text: origTokens[i - 1] });
-                i--;
-            }
-        }
-        result.reverse();
-        return result;
-    } else {
-        // Fallback for very long texts: just show as-is
-        return [{ type: 'unchanged', text: modified }];
+    // Cap quadratic CPU work for exceptionally large documents. Unlike the
+    // old fallback, this still shows the changed middle instead of pretending
+    // the entire rewritten text is unchanged.
+    const MAX_LCS_CELLS = 25_000_000;
+    if (m * n > MAX_LCS_CELLS) {
+        return coarseDiff(origTokens, newTokens);
     }
+
+    const matches = [];
+    collectMatches(origTokens, 0, m, newTokens, 0, n, matches);
+    return buildDiffFromMatches(origTokens, newTokens, matches);
 }
 
 /**

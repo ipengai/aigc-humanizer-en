@@ -63,6 +63,7 @@ REWRITE_MEDIAN_PARAS = 3
 REWRITE_HIGH_PARAS = 5
 REWRITE_MIN_CHARS = 300
 REWRITE_MAX_WORDS = 2000
+REWRITE_BATCH_SHORT_BLOCKS = True
 REWRITE_PROTECT_SHORT_PARAGRAPHS = False
 REWRITE_PROTECT_SHORT_LISTS = False
 ```
@@ -129,7 +130,9 @@ PDF、Markdown、TXT 也会整理为同一套有序节点；但只有 DOCX 能�
 
 `REWRITE_MEDIAN_PARAS` 和 `REWRITE_HIGH_PARAS` 是软上限，默认分别为3和5；`REWRITE_MIN_CHARS=300` 是上游请求的最小字符目标；`REWRITE_MAX_WORDS=2000` 是不能突破的硬上限。连续正文区域末尾若留下不足300字符的小块，会在不突破最大词数的前提下向前并入上一改写块。
 
-标题、参考文献等保护节点仍是结构硬边界。如果一个标题章节内的全部正文仍不足300字符，系统不会为了凑长度跨标题改写：付费 API 会在联网前拒绝发送这个短块；配置了备用服务时，仅当前短块由备用服务处理，下一块仍重新优先尝试主服务。
+标题、参考文献等保护节点仍是文档逻辑硬边界，不会发送给改写服务。启用 `REWRITE_BATCH_SHORT_BLOCKS=True` 时，如果某个标题章节内的正文仍不足300字符，系统只在网络请求层把相邻逻辑改写块临时拼成一个满足最小字符数的付费 API 请求；各逻辑块的原始段落数量、标题位置和 Word 源位置映射保持独立。
+
+批量返回后按空行拆段，只有返回段落总数与输入段落总数完全一致时，才按每个逻辑块原来的段落数量拆回结果，再按照原任务序列插回受保护标题。若主 API 把多段压成一个大段、增减了段落或请求失败，整批结果会被丢弃，不根据字符比例猜测标题位置：其中可独立满足300字符的块重新单独尝试主 API，不足300字符的块才交给备用服务。关闭该开关时，短块直接沿用单块主备逻辑。
 
 每个任务最终记录独立的 `task_id`；改写任务还记录 `block_id`、`source_node_ids` 和 `source_body_indexes`。主服务在第 N 块失败时，前 N-1 块结果保留，备用服务只处理第 N 块；第 N+1 块再次优先尝试主服务。结构化文件不会再从第1块重跑；没有段落结构的纯粘贴文本暂时仍只能进行整篇主备切换。
 

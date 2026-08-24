@@ -33,6 +33,7 @@ class AITextHumanizer(HumanizerAdapter):
     ERROR_RESPONSES = {"RESULT_TOO_LONG"}
     # 日志里的 backend 标识；Mock 子类会覆盖为专用标识。
     backend_label = "ai_text_humanizer"
+    supports_short_block_batching = True
 
     def __init__(self, email=None, password=None):
         """

@@ -38,6 +38,79 @@ def _heading_level_from_style(style):
     return None
 
 
+class _BatchParagraphMismatch(RuntimeError):
+    """Raised when a batched rewrite no longer preserves paragraph count."""
+
+
+def _split_blank_line_paragraphs(text):
+    """Split text on blank lines while tolerating CRLF and whitespace."""
+    normalized = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not normalized:
+        return []
+    return [
+        value.strip()
+        for value in re.split(r"\n[ \t]*\n+", normalized)
+        if value.strip()
+    ]
+
+
+def _build_rewrite_request_groups(rewrite_tasks, min_chars, max_words):
+    """Group short logical blocks into physical requests without merging tasks."""
+    indexed_tasks = list(enumerate(rewrite_tasks, 1))
+    if min_chars <= 0:
+        return [[item] for item in indexed_tasks]
+
+    groups = []
+    pending = []
+    pending_chars = 0
+    pending_words = 0
+
+    def flush_pending():
+        nonlocal pending, pending_chars, pending_words
+        if pending:
+            groups.append(pending)
+        pending = []
+        pending_chars = 0
+        pending_words = 0
+
+    for item in indexed_tasks:
+        _, task = item
+        text = (task.get("text") or "").strip()
+        chars = len(text)
+        words = len(text.split())
+
+        if not pending and chars >= min_chars:
+            groups.append([item])
+            continue
+
+        if pending and pending_words + words > max_words:
+            flush_pending()
+            if chars >= min_chars:
+                groups.append([item])
+                continue
+
+        if pending:
+            pending_chars += 2  # physical request joins logical blocks with \n\n
+        pending.append(item)
+        pending_chars += chars
+        pending_words += words
+        if pending_chars >= min_chars:
+            flush_pending()
+
+    if pending:
+        # A short document tail can safely share the preceding physical request.
+        previous_words = (
+            sum(len((task.get("text") or "").split()) for _, task in groups[-1])
+            if groups else 0
+        )
+        if groups and previous_words + pending_words <= max_words:
+            groups[-1].extend(pending)
+        else:
+            flush_pending()
+
+    return groups
+
+
 class HumanizerAdapter(ABC):
     """Interface for text humanization adapters."""
 
@@ -86,6 +159,7 @@ class HumanizerAdapter(ABC):
     def _humanize_segmented_structured(
         self, mode, paragraphs, block_rewriter, progress_cb=None,
         fallback_rewriter=None, primary_label=None, fallback_label=None,
+        batch_short_blocks=False,
     ):
         """
         分段改写并返回结构化结果：(text_str, structured_paragraphs)。
@@ -104,6 +178,9 @@ class HumanizerAdapter(ABC):
                 每个 rewrite 块完成后调用，用于前端展示"改写 x/total"真实进度。
             fallback_rewriter: 可选的单块备用改写回调。主回调抛异常时，
                 仅使用备用回调处理当前块；下一块仍重新调用主回调。
+            batch_short_blocks: 是否只在网络请求层把不足最小字符数的逻辑块
+                临时拼成一个请求。返回段落数必须与输入严格一致，否则放弃
+                整批结果并按逻辑块恢复主备处理。
         """
         _start = time.time()
         tasks = segment_paragraphs(
@@ -129,52 +206,158 @@ class HumanizerAdapter(ABC):
                 len(rewrite_tasks), len(tasks) - len(rewrite_tasks),
             )
 
-        # 频控：改写请求数超过阈值时，每次请求后 sleep，防止超 60 次/分钟
+        min_chars = int(_cfg('REWRITE_MIN_CHARS', 300))
+        max_words = int(_cfg('REWRITE_MAX_WORDS', 2000))
+        request_groups = (
+            _build_rewrite_request_groups(rewrite_tasks, min_chars, max_words)
+            if batch_short_blocks and len(rewrite_tasks) > 1
+            else [[item] for item in enumerate(rewrite_tasks, 1)]
+        )
+
+        # 频控：实际请求组数超过阈值时，每组请求后 sleep，防止超 60 次/分钟
         rate_limit_max = _cfg('RATE_LIMIT_MAX_REQUESTS', 30)
         rate_limit_sleep = _cfg('RATE_LIMIT_SLEEP', 1.0)
-        rate_limit_enabled = len(rewrite_tasks) > rate_limit_max
+        rate_limit_enabled = len(request_groups) > rate_limit_max
 
-        rewrite_idx = 0
-        for i, task in enumerate(tasks):
-            if task["type"] == "rewrite":
-                block_text = task["text"]
-                current_block = rewrite_idx + 1
-                try:
-                    # 每个块都重新优先调用主改写服务。
-                    rewritten = block_rewriter(block_text)
-                except Exception:
-                    if fallback_rewriter is None:
-                        raise
-                    logger.exception(
-                        "Primary humanizer %s failed at block=%d; "
-                        "using %s for current block",
-                        primary_label or "primary", current_block,
-                        fallback_label or "fallback",
+        rewritten_by_task_id = {}
+
+        def use_fallback(task, current_block, reason):
+            if fallback_rewriter is None:
+                raise RuntimeError(
+                    f"主改写服务在第{current_block}块不可用，且未配置备用服务"
+                )
+            logger.warning(
+                "rewrite stage=rewrite action=fallback block=%d reason=%s "
+                "primary=%s fallback=%s",
+                current_block, reason, primary_label or "primary",
+                fallback_label or "fallback",
+            )
+            if progress_cb:
+                progress_cb(
+                    stage="rewrite",
+                    block=current_block,
+                    total_blocks=len(rewrite_tasks),
+                    message=f"第{current_block}块使用备用改写服务",
+                )
+            try:
+                return fallback_rewriter(task["text"])
+            except Exception as fallback_error:
+                raise RuntimeError(
+                    f"备用改写服务在第{current_block}块不可用"
+                ) from fallback_error
+
+        def rewrite_one(task, current_block):
+            try:
+                # 每个独立块都重新优先调用主改写服务。
+                return block_rewriter(task["text"])
+            except Exception:
+                if fallback_rewriter is None:
+                    raise
+                logger.exception(
+                    "Primary humanizer %s failed at block=%d; "
+                    "using %s for current block",
+                    primary_label or "primary", current_block,
+                    fallback_label or "fallback",
+                )
+                return use_fallback(task, current_block, "primary_failed")
+
+        def recover_invalid_batch(group, reason):
+            recovered = {}
+            for current_block, task in group:
+                block_chars = len((task.get("text") or "").strip())
+                if min_chars > 0 and block_chars < min_chars:
+                    # 该短块已经随批次尝试过主服务；结构校验失败后不能猜测
+                    # 标题位置，直接交给备用服务处理当前逻辑块。
+                    rewritten = use_fallback(
+                        task, current_block, f"batch_{reason}"
                     )
-                    if progress_cb:
-                        progress_cb(
-                            stage="rewrite",
-                            block=current_block,
-                            total_blocks=len(rewrite_tasks),
-                            message=f"第{current_block}块使用备用改写服务",
+                else:
+                    # 批次中本可独立请求的块重新单独尝试主服务。
+                    rewritten = rewrite_one(task, current_block)
+                recovered[task["task_id"]] = rewritten
+            return recovered
+
+        for group_index, group in enumerate(request_groups):
+            if len(group) == 1:
+                current_block, task = group[0]
+                rewritten_by_task_id[task["task_id"]] = rewrite_one(
+                    task, current_block
+                )
+            else:
+                input_paragraph_counts = [
+                    len(_split_blank_line_paragraphs(task.get("text")))
+                    for _, task in group
+                ]
+                batch_text = "\n\n".join(
+                    (task.get("text") or "").strip() for _, task in group
+                )
+                block_numbers = [number for number, _ in group]
+                logger.info(
+                    "rewrite stage=rewrite backend=%s action=batch_start "
+                    "blocks=%s chars=%d paragraphs=%d",
+                    primary_label or "primary", block_numbers, len(batch_text),
+                    sum(input_paragraph_counts),
+                )
+                try:
+                    batch_result = block_rewriter(batch_text)
+                    output_paragraphs = _split_blank_line_paragraphs(batch_result)
+                    expected_paragraphs = sum(input_paragraph_counts)
+                    if (
+                        not all(input_paragraph_counts) or
+                        len(output_paragraphs) != expected_paragraphs
+                    ):
+                        raise _BatchParagraphMismatch(
+                            f"expected={expected_paragraphs} "
+                            f"actual={len(output_paragraphs)}"
                         )
-                    try:
-                        # 只兜底当前块；循环进入下一块后仍先执行上面的主调用。
-                        rewritten = fallback_rewriter(block_text)
-                    except Exception as fallback_error:
-                        raise RuntimeError(
-                            f"备用改写服务在第{current_block}块不可用"
-                        ) from fallback_error
+
+                    cursor = 0
+                    for (_, task), paragraph_count in zip(
+                        group, input_paragraph_counts
+                    ):
+                        rewritten_by_task_id[task["task_id"]] = "\n\n".join(
+                            output_paragraphs[cursor:cursor + paragraph_count]
+                        )
+                        cursor += paragraph_count
+                    logger.info(
+                        "rewrite stage=rewrite backend=%s action=batch_ok "
+                        "blocks=%s paragraphs=%d",
+                        primary_label or "primary", block_numbers,
+                        expected_paragraphs,
+                    )
+                except _BatchParagraphMismatch as mismatch:
+                    logger.warning(
+                        "rewrite stage=rewrite backend=%s action=batch_invalid "
+                        "blocks=%s reason=paragraph_mismatch detail=%s",
+                        primary_label or "primary", block_numbers, mismatch,
+                    )
+                    rewritten_by_task_id.update(
+                        recover_invalid_batch(group, "paragraph_mismatch")
+                    )
+                except Exception:
+                    logger.exception(
+                        "rewrite stage=rewrite backend=%s action=batch_failed "
+                        "blocks=%s",
+                        primary_label or "primary", block_numbers,
+                    )
+                    rewritten_by_task_id.update(
+                        recover_invalid_batch(group, "request_failed")
+                    )
+
+            if progress_cb:
+                for current_block, _ in group:
+                    progress_cb(
+                        stage="rewrite", block=current_block,
+                        total_blocks=len(rewrite_tasks)
+                    )
+            if rate_limit_enabled and group_index < len(request_groups) - 1:
+                time.sleep(rate_limit_sleep)
+
+        for task in tasks:
+            if task["type"] == "rewrite":
+                rewritten = rewritten_by_task_id[task["task_id"]]
                 source_paragraphs = task.get("paragraphs") or []
                 parts.append(rewritten)
-                # 进度回调：每完成一个改写块上报（block 从 1 开始）
-                if progress_cb:
-                    rewrite_idx += 1
-                    progress_cb(stage="rewrite", block=rewrite_idx,
-                                total_blocks=len(rewrite_tasks))
-                # 频控：改写请求间 sleep（除最后一次外）
-                if rate_limit_enabled and i < len(tasks) - 1:
-                    time.sleep(rate_limit_sleep)
                 item = {
                     "text": rewritten.strip(),
                     "was_rewritten": True,

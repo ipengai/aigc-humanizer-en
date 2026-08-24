@@ -2,7 +2,7 @@
 
 import logging
 
-from app.humanizer.adapter import HumanizerAdapter
+from app.humanizer.adapter import HumanizerAdapter, _cfg
 
 logger = logging.getLogger("app.humanizer.failover")
 
@@ -60,4 +60,9 @@ class FailoverHumanizer(HumanizerAdapter):
             ),
             primary_label=type(self.primary).__name__,
             fallback_label=type(self.fallback).__name__,
+            batch_short_blocks=(
+                bool(getattr(
+                    self.primary, "supports_short_block_batching", False
+                )) and bool(_cfg("REWRITE_BATCH_SHORT_BLOCKS", True))
+            ),
         )

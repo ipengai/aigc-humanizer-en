@@ -37,6 +37,7 @@ def sitemap_xml():
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     pages = [
         {'loc': site_url + '/', 'lastmod': today, 'changefreq': 'weekly', 'priority': '1.0'},
+        {'loc': site_url + '/faq', 'lastmod': today, 'changefreq': 'weekly', 'priority': '0.5'},
         {'loc': site_url + '/orders', 'lastmod': today, 'changefreq': 'weekly', 'priority': '0.3'},
     ]
     urls = '\n'.join(
@@ -56,6 +57,12 @@ def sitemap_xml():
 def index():
     """Landing page."""
     return render_template('index.html')
+
+
+@main_bp.route('/faq')
+def faq_page():
+    """Help / FAQ page with usage guide, tips and common questions."""
+    return render_template('faq.html')
 
 
 @main_bp.route('/orders')

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>使用帮助 - Huma</title>
+    <meta name="description" content="Huma 产品手册：英文论文/报告的 AI 痕迹优化工具。了解产品使用流程、降低 AI 率的技巧与注意事项，以及常见问题解答。">
+    <meta name="keywords" content="Huma,AI检测,降AI率,使用帮助,常见问题,论文改写,英文论文,Turnitin,使用流程">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://{{ request.host }}/faq">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260824-5') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Baidu Tongji -->
+    <script>
+    var _hmt = _hmt || [];
+    (function() {
+      var hm = document.createElement("script");
+      hm.src = "https://hm.baidu.com/hm.js?66d3bb29bac3c24749e02d0bcac2e6b8";
+      var s = document.getElementsByTagName("script")[0];
+      s.parentNode.insertBefore(hm, s);
+    })();
+    </script>
+</head>
+<body class="faq-page">
+
+    <!-- ============ NAV ============ -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <a href="/" class="logo">
+                <span class="logo-monogram">
+                    <svg viewBox="0 0 38 38" fill="none">
+                        <rect x="2" y="2" width="34" height="34" rx="10" fill="url(#h-grad)"/>
+                        <rect x="10" y="9" width="4" height="20" rx="2" fill="white"/>
+                        <rect x="24" y="9" width="4" height="20" rx="2" fill="white"/>
+                        <rect x="10" y="17" width="18" height="4" rx="2" fill="white"/>
+                        <defs>
+                            <linearGradient id="h-grad" x1="0" y1="0" x2="38" y2="38">
+                                <stop offset="0%" stop-color="#4f46e5"/>
+                                <stop offset="100%" stop-color="#06b6d4"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </span>
+                <span class="logo-word">Huma</span>
+            </a>
+            <button class="menu-toggle" id="menuToggle" aria-label="菜单" onclick="toggleMenu()">
+                <span class="menu-bar"></span>
+                <span class="menu-bar"></span>
+                <span class="menu-bar"></span>
+            </button>
+            <div class="nav-links">
+                <a href="/#features" class="nav-link">介绍</a>
+                <a href="/#pricing" class="nav-link">定价</a>
+                <a href="/faq" class="nav-link active">使用帮助</a>
+                <a href="/" class="btn btn-outline btn-sm">去使用</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ============ SIDEBAR NAV + CONTENT ============ -->
+    <section class="section faq-tabs-section">
+        <div class="container">
+            <div class="help-layout">
+                <aside class="help-sidebar">
+                    <nav class="help-nav" role="navigation" aria-label="帮助目录">
+                        <button class="help-nav-item active" id="tab-guide" data-tab="guide" onclick="switchHelpTab('guide')">产品使用流程</button>
+                        <button class="help-nav-item" id="tab-tips" data-tab="tips" onclick="switchHelpTab('tips')">使用技巧 &amp; 注意事项</button>
+                        <button class="help-nav-item" id="tab-faq" data-tab="faq" onclick="switchHelpTab('faq')">常见问题</button>
+                    </nav>
+                </aside>
+                <div class="help-content">
+
+            <!-- Panel 1: 产品使用流程 -->
+            <div class="help-panel active" id="panel-guide">
+                <div class="help-card">
+                    <h2 class="help-title">产品使用流程</h2>
+                    <p class="help-lead">登录 huma.ipengai.cn 后，按以下步骤即可完成英文论文/报告的 AI 痕迹优化。</p>
+
+                    <div class="steps">
+                        <div class="step">
+                            <div class="step-num">1</div>
+                            <div class="step-body">
+                                <h3>注册账号</h3>
+                                <p>注册后新用户默认<strong>免费赠送 200 个单词额度</strong>，可用于先行体验改写效果。</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-num">2</div>
+                            <div class="step-body">
+                                <h3>粘贴或上传文本</h3>
+                                <p>可直接<strong>复制粘贴文本</strong>，也可<strong>上传文档</strong>，支持 <strong>txt、docx、pdf</strong> 格式。需要保留标题与排版时，请使用 .docx 上传。</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-num">3</div>
+                            <div class="step-body">
+                                <h3>点击「一键改写」</h3>
+                                <p>点击按钮，系统将自动完成改写与润色。改写基于「LLM 改写 + 算法后处理」两段式架构，进行结构级重构。</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-num">4</div>
+                            <div class="step-body">
+                                <h3>按需付费</h3>
+                                <p>若当前账户额度不足以覆盖待改写内容，将<strong>自动弹出支付宝付费窗口</strong>，按实际字数计费。</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-num">5</div>
+                            <div class="step-body">
+                                <h3>查看改写对比</h3>
+                                <p>改写完成后，页面将展示<strong>改写前后的对比效果及预估 AI 率</strong>，方便你核对内容是否被正确保留。</p>
+                            </div>
+                        </div>
+                        <div class="step">
+                            <div class="step-num">6</div>
+                            <div class="step-body">
+                                <h3>下载结果</h3>
+                                <p>确认无误后，点击<strong>「下载」</strong>即可获取改写后的结果文件，直接用于后续提交。</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="help-note">
+                        <strong>💡 计费说明：</strong>产品采用按单词数计费，当前定价 <strong>14.9 元 / 1000 词</strong>。新用户注册默认赠送 200 词额度。后续将根据成本变化推出包月等套餐。
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 2: 使用技巧 & 注意事项 -->
+            <div class="help-panel" id="panel-tips">
+                <div class="help-card">
+                    <h2 class="help-title">使用技巧 &amp; 注意事项</h2>
+                    <p class="help-lead">理解 Huma 的改写原理，能帮你更高效地降低 AI 率、通过检测。</p>
+
+                    <div class="help-subtitle">🎯 如何获得更低的 AI 率</div>
+                    <div class="tips-grid">
+                        <div class="tip-item">
+                            <div class="tip-icon">🎯</div>
+                            <h3>面向 Turnitin 复核</h3>
+                            <p>Huma 专为最严苛的 Turnitin 开发，实测绝大多数文本可将 AI 率降至 20% 目标线以下。改写后建议再用目标平台复核确认。</p>
+                        </div>
+                        <div class="tip-item">
+                            <div class="tip-icon">🧩</div>
+                            <h3>结构级重构才有效</h3>
+                            <p>Huma 做的是结构级重构而非简单同义替换——打散公式化骨架、拆解「A, B, and C」三元并列、删去重复观点，从根本消除 AI 特征。</p>
+                        </div>
+                        <div class="tip-item">
+                            <div class="tip-icon">🗣️</div>
+                            <h3>让文本像「人」写的</h3>
+                            <p>改写会营造人类写作的不规则性：长短句交错、一句承载一个信息点，并在合适语境注入反问、口语化与个人化细节。</p>
+                        </div>
+                        <div class="tip-item">
+                            <div class="tip-icon">📖</div>
+                            <h3>学术核心安全保留</h3>
+                            <p>坚持「改好」而非「改错」：语法完全正确、专有名词与核心事实原样保留、可读性只升不降，无需担心内容被破坏。</p>
+                        </div>
+                    </div>
+
+                    <div class="help-subtitle">⚠️ 注意事项</div>
+                    <div class="tips-grid">
+                        <div class="tip-item">
+                            <div class="tip-icon">🔒</div>
+                            <h3>数据隐私安全</h3>
+                            <p>上传的数据会定期删除，论文内容不会被收录入库。所有传输均采用 SSL 加密。</p>
+                        </div>
+                        <div class="tip-item">
+                            <div class="tip-icon">📄</div>
+                            <h3>保留排版用 Word</h3>
+                            <p>需要保留原有标题与排版格式时，请上传 .docx 格式，下载时可完整保留版式。</p>
+                        </div>
+                        <div class="tip-item">
+                            <div class="tip-icon">⚡</div>
+                            <h3>整篇改写够快</h3>
+                            <p>依托个性化 LLM 改写与自研规则引擎，整篇论文改写通常在数分钟内即可完成。</p>
+                        </div>
+                        <div class="tip-item">
+                            <div class="tip-icon">✅</div>
+                            <h3>以目标平台为准</h3>
+                            <p>不同检测平台的模型与阈值存在差异，最终判定请以 Turnitin、GPTZero 等目标平台的官方结果为准。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 3: 常见问题 -->
+            <div class="help-panel" id="panel-faq">
+                <div class="help-card">
+                    <h2 class="help-title">常见问题</h2>
+                    <p class="help-lead">这里汇总了大家最常遇到的问题。</p>
+
+                    <div class="faq-list">
+                        <div class="faq-item">
+                            <button class="faq-question"><span>Huma 检测准确率高吗？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
+                            <div class="faq-answer">
+                                <p>Huma 会综合分析文本中的多项写作特征，用于改写前后的风险参考和重点段落定位。不同检测平台的模型与阈值并不相同，因此结果不能替代 Turnitin、GPTZero 等目标平台的官方判定。</p>
+                            </div>
+                        </div>
+                        <div class="faq-item">
+                            <button class="faq-question"><span>修改后会影响原文意思吗？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
+                            <div class="faq-answer">
+                                <p>不会。我们的改写引擎专注于降低 AI 写作特征——替换 AI 常用短语、增加句式变化、优化词汇多样性。学术术语、专业名词、数据引用等核心内容都会被保留。每次改写后你可以复查对比原文和改写结果。</p>
+                            </div>
+                        </div>
+                        <div class="faq-item">
+                            <button class="faq-question"><span>支付后不满意怎么办？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
+                            <div class="faq-answer">
+                                <p>如果使用主流检测平台验证后 AI 率未显著降低，请联系客服处理。</p>
+                            </div>
+                        </div>
+                        <div class="faq-item">
+                            <button class="faq-question"><span>支持哪些文件格式？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
+                            <div class="faq-answer">
+                                <p>支持上传 .docx（Word）、.pdf、.txt 和 .md（Markdown）格式文件，同时支持直接粘贴英文文本。单个文件最大 20MB。建议使用 .docx 格式以获得最佳兼容性。</p>
+                            </div>
+                        </div>
+                        <div class="faq-item">
+                            <button class="faq-question"><span>我的文档隐私安全吗？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
+                            <div class="faq-answer">
+                                <p>所有传输采用 SSL 加密，文档仅用于完成当前检测与改写请求。改写时正文会发送给当前配置的第三方处理服务，具体数据政策以对应服务商条款为准；上传的临时文件会按系统清理策略删除。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </div><!-- /help-content -->
+            </div><!-- /help-layout -->
+        </div>
+    </section>
+
+    <!-- ============ FOOTER ============ -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <span class="logo-word" style="font-size:1.2rem;font-weight:700;">Huma</span>
+                    <p>降低 AI 检测率，让内容更自然</p>
+                </div>
+                <div class="footer-links">
+                    <h5>产品</h5>
+                    <a href="/#features">介绍</a>
+                    <a href="/#pricing">定价</a>
+                    <a href="/faq">使用帮助</a>
+                </div>
+                <div class="footer-links">
+                    <h5>支持</h5>
+                    <a href="https://ipengai.cn" target="_blank">工作室主页</a>
+                    <a href="mailto:service@ipengai.cn">联系我们</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; <span id="copyright-year">2026</span> Huma. All rights reserved. &nbsp;|&nbsp; <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">京ICP备2026033653号</a> &nbsp;|&nbsp; <a href="https://www.beian.gov.cn/portal/registerSystemInfo?recordcode=11011402056292" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;"><svg viewBox="0 0 20 20" width="14" height="14" style="vertical-align:-2px;margin-right:3px;" fill="currentColor"><path d="M10 1L2 4v5c0 4.5 3 8.7 8 10 5-1.3 8-5.5 8-10V4l-8-3zm0 2.1l5.6 2.1V9c0 3.3-2.4 6.5-5.6 7.7V3.1z"/></svg>京公网安备11011402056292号</a></p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+    // Dynamic copyright year
+    document.getElementById('copyright-year').textContent = new Date().getFullYear();
+
+    function toggleMenu() {
+        const navLinks = document.querySelector('.nav-links');
+        const toggle = document.getElementById('menuToggle');
+        navLinks.classList.toggle('active');
+        toggle.classList.toggle('open');
+    }
+
+    // Close menu when a nav link is clicked
+    document.querySelectorAll('.nav-link').forEach(link => {
+        link.addEventListener('click', () => {
+            document.querySelector('.nav-links').classList.remove('active');
+            document.getElementById('menuToggle').classList.remove('open');
+        });
+    });
+
+    /* ========== HELP SIDEBAR NAV ========== */
+    function switchHelpTab(name) {
+        document.querySelectorAll('.help-nav-item').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+        document.querySelectorAll('.help-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+    }
+
+    /* ========== FAQ ACCORDION ========== */
+    document.querySelectorAll('.faq-question').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const item = btn.closest('.faq-item');
+            const isOpen = item.classList.contains('open');
+            document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
+            if (!isOpen) item.classList.add('open');
+        });
+    });
+    </script>
+</body>
+</html>

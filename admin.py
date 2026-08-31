@@ -17,7 +17,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
-from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
+from flask import (
+    Flask, abort, jsonify, redirect, render_template_string, request,
+    send_from_directory, session, url_for,
+)
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 
@@ -27,6 +30,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
 # ---------- Config ----------
 PROJ_ROOT = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(PROJ_ROOT, 'instance', 'aigc_humanizer.db')
+FEEDBACK_UPLOAD_FOLDER = os.path.join(PROJ_ROOT, 'instance', 'feedback_uploads')
 ADMIN_PORT = int(os.environ.get('ADMIN_PORT', 5001))
 ADMIN_SECRET_KEY = os.environ.get('ADMIN_SECRET_KEY', os.urandom(24).hex())
 ADMIN_PASSWORD_HASH = generate_password_hash(
@@ -313,10 +317,7 @@ def api_trends():
 @admin_app.route('/admin/api/rewrite-stats')
 @login_required
 def api_rewrite_stats():
-    """改写效果统计：指定时间范围内，改写后 AI 率降到 20% 以下的比例。
-
-    只统计 status='completed' 且改写前后 AI 率均为有效分数（0-100）的订单。
-    """
+    """Combine system scores, structural signals, and user-reported results."""
     start_date = request.args.get('start', '')
     end_date = request.args.get('end', '')
 
@@ -334,14 +335,50 @@ def api_rewrite_stats():
 
     conn = get_db()
     try:
+        order_columns = {
+            row['name'] for row in conn.execute("PRAGMA table_info(orders)").fetchall()
+        }
+        optional_columns = {
+            name: name if name in order_columns else f"NULL AS {name}"
+            for name in (
+                'humanizer_backend', 'word_count_change_ratio',
+                'heading_count_changed', 'completed_at',
+            )
+        }
         rows = conn.execute(
-            "SELECT mode, original_score, rewritten_score, created_at FROM orders "
+            f"""SELECT mode, detector_backend,
+                      {optional_columns['humanizer_backend']},
+                      original_score, rewritten_score,
+                      {optional_columns['word_count_change_ratio']},
+                      {optional_columns['heading_count_changed']},
+                      created_at, {optional_columns['completed_at']}
+               FROM orders
+            """
             "WHERE status = 'completed' "
             "AND created_at >= ? AND created_at < ? "
             "AND original_score IS NOT NULL AND rewritten_score IS NOT NULL "
             "AND original_score BETWEEN 0 AND 100 AND rewritten_score BETWEEN 0 AND 100",
             (start_iso, end_iso)
         ).fetchall()
+
+        feedback_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'rewrite_feedback'"
+        ).fetchone()
+        if feedback_table_exists:
+            feedback_rows = conn.execute(
+                """SELECT f.*, o.mode, o.detector_backend, o.rewritten_score,
+                          u.email AS user_email
+                   FROM rewrite_feedback f
+                   JOIN orders o ON o.order_id = f.order_id
+                   LEFT JOIN users u ON u.id = f.user_id
+                   WHERE o.status = 'completed'
+                     AND o.created_at >= ? AND o.created_at < ?
+                   ORDER BY f.updated_at DESC
+                   LIMIT 50""",
+                (start_iso, end_iso)
+            ).fetchall()
+        else:
+            feedback_rows = []
     finally:
         conn.close()
 
@@ -349,6 +386,51 @@ def api_rewrite_stats():
     below20 = sum(1 for r in rows if r['rewritten_score'] < 20)
     originals = [r['original_score'] for r in rows]
     rewrites = [r['rewritten_score'] for r in rows]
+    improved = sum(1 for r in rows if r['rewritten_score'] < r['original_score'])
+    worsened = sum(1 for r in rows if r['rewritten_score'] > r['original_score'])
+    word_changes = [
+        abs(r['word_count_change_ratio']) for r in rows
+        if r['word_count_change_ratio'] is not None
+    ]
+    heading_warnings = sum(1 for r in rows if r['heading_count_changed'])
+
+    durations = []
+    for row in rows:
+        if not row['completed_at'] or not row['created_at']:
+            continue
+        try:
+            duration = (
+                datetime.fromisoformat(row['completed_at'])
+                - datetime.fromisoformat(row['created_at'])
+            ).total_seconds()
+            if duration >= 0:
+                durations.append(duration)
+        except (TypeError, ValueError):
+            continue
+
+    issue_counts = {}
+    external_scores = []
+    recent_feedback = []
+    for row in feedback_rows:
+        issue_counts[row['issue_type']] = issue_counts.get(row['issue_type'], 0) + 1
+        if row['external_score'] is not None:
+            external_scores.append(row['external_score'])
+        recent_feedback.append({
+            'order_id': row['order_id'],
+            'user_email': row['user_email'],
+            'issue_type': row['issue_type'],
+            'detector_platform': row['detector_platform'],
+            'external_score': row['external_score'],
+            'comment': row['comment'],
+            'contact_allowed': bool(row['contact_allowed']),
+            'updated_at': row['updated_at'],
+            'screenshot_url': (
+                url_for('feedback_screenshot', file_key=row['screenshot_file_key'])
+                if row['screenshot_file_key'] else None
+            ),
+        })
+
+    external_below20 = sum(1 for score in external_scores if score < 20)
 
     return jsonify({
         'start_date': start_date,
@@ -356,10 +438,39 @@ def api_rewrite_stats():
         'sample_count': n,
         'below20_count': below20,
         'below20_ratio': round(below20 / n, 4) if n else 0,
+        'improved_count': improved,
+        'improved_ratio': round(improved / n, 4) if n else 0,
+        'worsened_count': worsened,
+        'worsened_ratio': round(worsened / n, 4) if n else 0,
         'avg_original_score': round(sum(originals) / n, 1) if n else 0,
         'avg_rewritten_score': round(sum(rewrites) / n, 1) if n else 0,
         'avg_improvement': round((sum(originals) - sum(rewrites)) / n, 1) if n else 0,
+        'avg_abs_word_change_ratio': (
+            round(sum(word_changes) / len(word_changes), 4) if word_changes else 0
+        ),
+        'heading_warning_count': heading_warnings,
+        'avg_processing_seconds': (
+            round(sum(durations) / len(durations), 1) if durations else 0
+        ),
+        'feedback_count': len(feedback_rows),
+        'feedback_issue_counts': issue_counts,
+        'external_score_count': len(external_scores),
+        'external_below20_count': external_below20,
+        'external_below20_ratio': (
+            round(external_below20 / len(external_scores), 4)
+            if external_scores else 0
+        ),
+        'recent_feedback': recent_feedback,
     })
+
+
+@admin_app.route('/admin/feedback-screenshot/<file_key>')
+@login_required
+def feedback_screenshot(file_key):
+    """Serve private feedback evidence to authenticated admins only."""
+    if file_key != os.path.basename(file_key):
+        abort(404)
+    return send_from_directory(FEEDBACK_UPLOAD_FOLDER, file_key)
 
 
 # ============================================================
@@ -1042,10 +1153,10 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             <span class="date-sep">至</span>
             <input type="date" id="stats-date-end">
             <button class="btn-query" onclick="loadStats()">查询</button>
-            <button class="btn-preset" onclick="setStatsPreset('7days')">近7天</button>
-            <button class="btn-preset" onclick="setStatsPreset('30days')">近30天</button>
-            <button class="btn-preset" onclick="setStatsPreset('thisMonth')">本月</button>
-            <button class="btn-preset" onclick="setStatsPreset('all')">全部</button>
+            <button class="btn-preset" onclick="setStatsPreset('7days', this)">近7天</button>
+            <button class="btn-preset" onclick="setStatsPreset('30days', this)">近30天</button>
+            <button class="btn-preset" onclick="setStatsPreset('thisMonth', this)">本月</button>
+            <button class="btn-preset" onclick="setStatsPreset('all', this)">全部</button>
         </div>
 
         <div class="error-banner" id="stats-error-banner" style="display:none;"></div>
@@ -1067,6 +1178,42 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 <div class="label">平均降幅 (pp)</div>
                 <div class="value" id="st-improve">0</div>
             </div>
+            <div class="summary-card">
+                <div class="label">改写后反而升高</div>
+                <div class="value" id="st-worsened" style="color:#dc2626;">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">平均篇幅变动</div>
+                <div class="value" id="st-word-change">0%</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">标题结构异常</div>
+                <div class="value" id="st-heading-warning">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">平均处理耗时</div>
+                <div class="value" id="st-duration">0s</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">用户反馈</div>
+                <div class="value" id="st-feedback">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">外部实测 &lt;20%</div>
+                <div class="value" id="st-external-ratio" style="color:#2563eb;">-</div>
+            </div>
+        </div>
+
+        <div class="table-wrapper" id="stats-feedback-wrapper" style="display:none;margin-top:20px;">
+            <div style="padding:16px 18px 8px;font-weight:600;">用户真实反馈</div>
+            <div id="stats-feedback-summary" style="padding:0 18px 12px;color:#64748b;font-size:0.85rem;"></div>
+            <table>
+                <thead><tr>
+                    <th>更新时间</th><th>订单</th><th>用户</th><th>反馈</th>
+                    <th>外部检测</th><th>说明</th><th>允许联系</th><th>截图</th>
+                </tr></thead>
+                <tbody id="stats-feedback-body"></tbody>
+            </table>
         </div>
 
         <div class="loading" id="stats-loading" style="display:none;">
@@ -1397,8 +1544,12 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                             <span>文件: ${escapeHtml(o.original_filename || '-')}</span>
                             <span>改写方法: ${modeLabel(o.mode)}</span>
                             <span>检测方法: ${detectorLabel(o.detector_backend)}</span>
+                            <span>改写后端: ${escapeHtml(o.humanizer_backend || '-')}</span>
                             <span>充值词数: ${o.recharge_words || '-'}</span>
                             <span>余额消耗: ${o.balance_words_used || '-'}</span>
+                            <span>改写后词数: ${o.rewritten_word_count || '-'}</span>
+                            <span>篇幅变化: ${o.word_count_change_ratio == null ? '-' : (o.word_count_change_ratio * 100).toFixed(1) + '%'}</span>
+                            <span>标题结构: ${o.heading_count_changed ? '⚠️ 数量变化' : '正常'}</span>
                             <span>原始评分: ${o.original_score != null ? o.original_score + '%' : '-'}</span>
                             <span>改写评分: ${o.rewritten_score != null ? o.rewritten_score + '%' : '-'}</span>
                             <span>支付时间: ${o.paid_at ? formatTime(o.paid_at) : '-'}</span>
@@ -1496,6 +1647,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
         summary.style.display = 'none';
         empty.style.display = 'none';
+        document.getElementById('stats-feedback-wrapper').style.display = 'none';
         loading.style.display = 'block';
 
         const start = document.getElementById('stats-date-start').value;
@@ -1519,12 +1671,27 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         document.getElementById('st-below20').textContent = data.below20_count.toLocaleString();
         document.getElementById('st-ratio').textContent = (data.below20_ratio * 100).toFixed(1) + '%';
         document.getElementById('st-improve').textContent = data.avg_improvement.toFixed(1);
+        document.getElementById('st-worsened').textContent =
+            data.worsened_count.toLocaleString() + ' (' + (data.worsened_ratio * 100).toFixed(1) + '%)';
+        document.getElementById('st-word-change').textContent =
+            (data.avg_abs_word_change_ratio * 100).toFixed(1) + '%';
+        document.getElementById('st-heading-warning').textContent =
+            data.heading_warning_count.toLocaleString();
+        document.getElementById('st-duration').textContent =
+            data.avg_processing_seconds >= 60
+                ? (data.avg_processing_seconds / 60).toFixed(1) + 'm'
+                : data.avg_processing_seconds.toFixed(0) + 's';
+        document.getElementById('st-feedback').textContent = data.feedback_count.toLocaleString();
+        document.getElementById('st-external-ratio').textContent = data.external_score_count
+            ? (data.external_below20_ratio * 100).toFixed(1) + '% (' + data.external_score_count + '份)'
+            : '-';
         summary.style.display = 'grid';
 
-        if (data.sample_count === 0) { empty.style.display = 'block'; }
+        renderFeedbackStats(data);
+        if (data.sample_count === 0 && data.feedback_count === 0) { empty.style.display = 'block'; }
     }
 
-    function setStatsPreset(type) {
+    function setStatsPreset(type, button) {
         const today = fmtDate(new Date());
         const startEl = document.getElementById('stats-date-start');
         const endEl = document.getElementById('stats-date-end');
@@ -1543,8 +1710,43 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             endEl.value = today;
         }
         document.querySelectorAll('#content-stats .btn-preset').forEach(b => b.classList.remove('active'));
-        event.target.classList.add('active');
+        if (button) button.classList.add('active');
         loadStats();
+    }
+
+    function renderFeedbackStats(data) {
+        const wrapper = document.getElementById('stats-feedback-wrapper');
+        const tbody = document.getElementById('stats-feedback-body');
+        const summaryEl = document.getElementById('stats-feedback-summary');
+        const labels = {
+            satisfied: '效果符合预期', high_ai_score: 'AI率仍高',
+            content_disorder: '内容/结构错乱', meaning_changed: '原意改变',
+            details_lost: '标题/数据/术语丢失', other: '其他问题'
+        };
+        const issueSummary = Object.entries(data.feedback_issue_counts || {})
+            .map(([key, count]) => `${labels[key] || key} ${count}`)
+            .join(' · ');
+        summaryEl.textContent = issueSummary || '暂无分类数据';
+        const rows = data.recent_feedback || [];
+        tbody.innerHTML = rows.map(item => {
+            const external = item.external_score == null
+                ? escapeHtml(item.detector_platform || '-')
+                : `${escapeHtml(item.detector_platform || '未填写平台')} ${item.external_score}%`;
+            const screenshot = item.screenshot_url
+                ? `<a href="${escapeHtml(item.screenshot_url)}" target="_blank" rel="noopener">查看</a>`
+                : '-';
+            return `<tr>
+                <td>${formatTime(item.updated_at)}</td>
+                <td style="font-family:monospace;font-size:0.75rem;">${escapeHtml(item.order_id)}</td>
+                <td>${escapeHtml(item.user_email || '-')}</td>
+                <td>${escapeHtml(labels[item.issue_type] || item.issue_type)}</td>
+                <td>${external}</td>
+                <td style="max-width:280px;white-space:normal;">${escapeHtml(item.comment || '-')}</td>
+                <td>${item.contact_allowed ? '是' : '否'}</td>
+                <td>${screenshot}</td>
+            </tr>`;
+        }).join('');
+        wrapper.style.display = rows.length ? 'block' : 'none';
     }
 
     function renderStatsError(msg) {

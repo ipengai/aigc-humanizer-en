@@ -32,6 +32,7 @@ def init_db():
         Order.init_table(conn)
         ActivationCode.init_table(conn)
         BalanceTransaction.init_table(conn)
+        RewriteFeedback.init_table(conn)
     finally:
         conn.close()
 
@@ -152,8 +153,15 @@ class Order:
                 price REAL,
                 mode TEXT DEFAULT 'low',
                 detector_backend TEXT,
+                humanizer_backend TEXT,
                 original_score REAL,
                 rewritten_score REAL,
+                rewritten_word_count INTEGER,
+                word_count_change_ratio REAL,
+                original_heading_count INTEGER,
+                rewritten_heading_count INTEGER,
+                heading_count_changed INTEGER DEFAULT 0,
+                completed_at TEXT,
                 status TEXT DEFAULT 'pending',
                 payment_status TEXT DEFAULT 'pending',
                 alipay_trade_no TEXT,
@@ -217,6 +225,20 @@ class Order:
             conn.execute("ALTER TABLE orders ADD COLUMN document_updated_at TEXT")
         if 'detector_backend' not in columns:
             conn.execute("ALTER TABLE orders ADD COLUMN detector_backend TEXT")
+        if 'humanizer_backend' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN humanizer_backend TEXT")
+        if 'rewritten_word_count' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN rewritten_word_count INTEGER")
+        if 'word_count_change_ratio' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN word_count_change_ratio REAL")
+        if 'original_heading_count' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN original_heading_count INTEGER")
+        if 'rewritten_heading_count' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN rewritten_heading_count INTEGER")
+        if 'heading_count_changed' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN heading_count_changed INTEGER DEFAULT 0")
+        if 'completed_at' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN completed_at TEXT")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_alipay_trade_no "
             "ON orders(alipay_trade_no) WHERE alipay_trade_no IS NOT NULL"
@@ -413,12 +435,50 @@ class Order:
 
     @classmethod
     def update_result(cls, conn, order_id, rewritten_text, rewritten_score, original_score=None,
-                      rewritten_paragraphs=None, detector_backend=None):
+                      rewritten_paragraphs=None, detector_backend=None,
+                      humanizer_backend=None):
         """Update order with rewrite result (called after humanization completes)."""
         import json
         paragraphs_json = json.dumps(
             rewritten_paragraphs, ensure_ascii=False
         ) if rewritten_paragraphs else None
+
+        existing = conn.execute(
+            "SELECT word_count, paragraphs FROM orders WHERE order_id = ?",
+            (order_id,)
+        ).fetchone()
+        original_word_count = int(existing['word_count'] or 0) if existing else 0
+        rewritten_word_count = len((rewritten_text or '').split())
+        word_count_change_ratio = (
+            (rewritten_word_count - original_word_count) / original_word_count
+            if original_word_count else None
+        )
+
+        original_paragraphs = []
+        if existing and existing['paragraphs']:
+            try:
+                loaded = json.loads(existing['paragraphs'])
+                original_paragraphs = loaded if isinstance(loaded, list) else []
+            except (TypeError, ValueError):
+                original_paragraphs = []
+        rewritten_items = rewritten_paragraphs if isinstance(rewritten_paragraphs, list) else []
+        original_heading_count = sum(
+            1 for item in original_paragraphs
+            if isinstance(item, dict) and item.get('is_heading')
+        )
+        rewritten_heading_count = sum(
+            1 for item in rewritten_items
+            if isinstance(item, dict) and item.get('is_heading')
+        )
+        heading_count_changed = int(original_heading_count != rewritten_heading_count)
+        completed_at = datetime.now(timezone.utc).isoformat()
+
+        common_values = (
+            rewritten_text, rewritten_score, paragraphs_json, detector_backend,
+            humanizer_backend, rewritten_word_count, word_count_change_ratio,
+            original_heading_count, rewritten_heading_count,
+            heading_count_changed, completed_at,
+        )
         if original_score is not None:
             conn.execute(
                 """UPDATE orders
@@ -427,10 +487,16 @@ class Order:
                        original_score = ?,
                        rewritten_paragraphs = ?,
                        detector_backend = ?,
+                       humanizer_backend = ?,
+                       rewritten_word_count = ?,
+                       word_count_change_ratio = ?,
+                       original_heading_count = ?,
+                       rewritten_heading_count = ?,
+                       heading_count_changed = ?,
+                       completed_at = ?,
                        status = 'completed'
                    WHERE order_id = ?""",
-                (rewritten_text, rewritten_score, original_score, paragraphs_json,
-                 detector_backend, order_id)
+                (rewritten_text, rewritten_score, original_score) + common_values[2:] + (order_id,)
             )
         else:
             conn.execute(
@@ -439,9 +505,16 @@ class Order:
                        rewritten_score = ?,
                        rewritten_paragraphs = ?,
                        detector_backend = ?,
+                       humanizer_backend = ?,
+                       rewritten_word_count = ?,
+                       word_count_change_ratio = ?,
+                       original_heading_count = ?,
+                       rewritten_heading_count = ?,
+                       heading_count_changed = ?,
+                       completed_at = ?,
                        status = 'completed'
                    WHERE order_id = ?""",
-                (rewritten_text, rewritten_score, paragraphs_json, detector_backend, order_id)
+                common_values + (order_id,)
             )
         conn.commit()
     @classmethod
@@ -459,13 +532,76 @@ class Order:
         10 分钟 = 与支付宝 timeout_express 和前端 QR 过期时间保持一致（P6）"""
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
         conn.execute(
-            """UPDATE orders 
+            """UPDATE orders
                SET payment_status = 'expired', status = 'expired'
                WHERE payment_status = 'pending' AND created_at < ?""",
             (cutoff,)
         )
         conn.commit()
 
+
+class RewriteFeedback:
+    """User-reported result quality for a completed rewrite order."""
+
+    @classmethod
+    def init_table(cls, conn):
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rewrite_feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                order_id TEXT UNIQUE NOT NULL,
+                issue_type TEXT NOT NULL,
+                detector_platform TEXT,
+                external_score REAL,
+                comment TEXT,
+                contact_allowed INTEGER DEFAULT 0,
+                screenshot_file_key TEXT,
+                status TEXT DEFAULT 'new',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id),
+                FOREIGN KEY (order_id) REFERENCES orders(order_id)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rewrite_feedback_created_at "
+            "ON rewrite_feedback(created_at)"
+        )
+        conn.commit()
+
+    @classmethod
+    def upsert(cls, conn, user_id, order_id, issue_type,
+               detector_platform=None, external_score=None, comment=None,
+               contact_allowed=False, screenshot_file_key=None):
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """INSERT INTO rewrite_feedback
+               (user_id, order_id, issue_type, detector_platform, external_score,
+                comment, contact_allowed, screenshot_file_key, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(order_id) DO UPDATE SET
+                   issue_type = excluded.issue_type,
+                   detector_platform = excluded.detector_platform,
+                   external_score = excluded.external_score,
+                   comment = excluded.comment,
+                   contact_allowed = excluded.contact_allowed,
+                   screenshot_file_key = COALESCE(
+                       excluded.screenshot_file_key,
+                       rewrite_feedback.screenshot_file_key
+                   ),
+                   updated_at = excluded.updated_at""",
+            (user_id, order_id, issue_type, detector_platform, external_score,
+             comment, int(bool(contact_allowed)), screenshot_file_key, now, now)
+        )
+        conn.commit()
+        return cls.get_by_order_id(conn, order_id)
+
+    @classmethod
+    def get_by_order_id(cls, conn, order_id):
+        row = conn.execute(
+            "SELECT * FROM rewrite_feedback WHERE order_id = ?", (order_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
 class ActivationCode:
     """Activation/recharge code model for Xianyu channel."""

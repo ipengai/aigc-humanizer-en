@@ -50,6 +50,9 @@ def create_app():
     app.config['UPLOAD_FOLDER'] = os.path.join(PROJ_ROOT, 'uploads')
     app.config['SOURCE_DOCS_FOLDER'] = os.path.join(PROJ_ROOT, 'instance', 'source_docs')
     app.config['OUTPUT_DOCS_FOLDER'] = os.path.join(PROJ_ROOT, 'instance', 'output_docs')
+    app.config['FEEDBACK_UPLOAD_FOLDER'] = os.path.join(
+        PROJ_ROOT, 'instance', 'feedback_uploads'
+    )
     app.config['PAYMENT_ADAPTER'] = PAYMENT_ADAPTER
     app.config['HUMANIZER_ADAPTER'] = HUMANIZER_ADAPTER
     app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
@@ -67,6 +70,7 @@ def create_app():
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
     os.makedirs(app.config['SOURCE_DOCS_FOLDER'], exist_ok=True)
     os.makedirs(app.config['OUTPUT_DOCS_FOLDER'], exist_ok=True)
+    os.makedirs(app.config['FEEDBACK_UPLOAD_FOLDER'], exist_ok=True)
 
     # ── Database ──
     from app.models import init_db

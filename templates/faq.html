@@ -9,7 +9,7 @@
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://{{ request.host }}/faq">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260825-3') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260831-2') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Baidu Tongji -->
@@ -153,7 +153,7 @@
                         <div class="tip-item">
                             <div class="tip-icon">🎯</div>
                             <h3>面向 Turnitin 复核</h3>
-                            <p>Huma 专为最严苛的 Turnitin 开发，实测绝大多数文本可将 AI 率降至 20% 目标线以下。改写后建议再用目标平台复核确认。</p>
+                            <p>Huma 以常见检测场景低于 20% 为优化目标，并针对 Turnitin 场景持续调优。效果会受原文、篇幅和检测平台影响，暂不承诺固定 AI 率，请以目标平台复核结果为准。</p>
                         </div>
                         <div class="tip-item">
                             <div class="tip-icon">🧩</div>
@@ -209,13 +209,13 @@
                         <div class="faq-item">
                             <button class="faq-question"><span>修改后会影响原文意思吗？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
                             <div class="faq-answer">
-                                <p>不会。改写引擎专注于降低 AI 写作特征——替换 AI 常用短语、增加句式变化、优化词汇多样性。但<strong>学术术语、专有名词、数据引用等细节无法保证完全不被改写</strong>，请在交付前复查对比原文，必要时手动微调。</p>
+                                <p>改写会尽量保留原意，同时替换 AI 常用短语、增加句式变化、优化词汇多样性。但<strong>学术术语、专有名词、数据引用等细节无法保证完全不被改写</strong>，请在交付前复查对比原文，必要时手动微调。</p>
                             </div>
                         </div>
                         <div class="faq-item">
                             <button class="faq-question"><span>支付后不满意怎么办？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
                             <div class="faq-answer">
-                                <p>如果使用主流检测平台验证后 AI 率未显著降低，请联系客服处理。</p>
+                                <p>当前版本不承诺固定 AI 率或“不达标退款”。如果 AI 率仍高、内容结构错乱或原意发生变化，可在改写结果页或历史订单中提交反馈，并附上目标检测平台、实测 AI 率和截图。反馈用于定位问题和优化产品，不包含免费逐段人工改写。</p>
                             </div>
                         </div>
                         <div class="faq-item">
@@ -241,6 +241,14 @@
                     <p class="help-lead">这里汇总 Huma 的功能迭代与版本更新，我们会持续维护更新。</p>
 
                     <div class="changelog">
+                        <div class="cl-item">
+                            <div class="cl-date">2026-08-31</div>
+                            <ul class="cl-list">
+                                <li>💬 新增改写结果反馈：可提交外部检测平台、实测 AI 率、问题类型与截图。</li>
+                                <li>📊 完善效果监控：增加 AI 率变化、篇幅变化、标题结构异常和用户真实反馈统计。</li>
+                                <li>🧭 明确结果预期：以低于 20% 为优化目标，但暂不承诺固定 AI 率或不达标退款。</li>
+                            </ul>
+                        </div>
                         <div class="cl-item">
                             <div class="cl-date">2026-08-25</div>
                             <ul class="cl-list">

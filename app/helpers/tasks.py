@@ -231,6 +231,7 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
         "original_analysis": original_analysis,
         "rewritten_analysis": rewritten_analysis,
         "detector_backend": (original_analysis or {}).get('backend') or 'unknown',
+        "humanizer_backend": type(humanizer_adapter).__name__,
     }
 
 
@@ -266,7 +267,8 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
                 rewritten_analysis.get('ai_score', 0),
                 original_analysis.get('ai_score', 0),
                 rewritten_paragraphs=rewritten_paragraphs,
-                detector_backend=result.get("detector_backend")
+                detector_backend=result.get("detector_backend"),
+                humanizer_backend=result.get("humanizer_backend")
             )
         finally:
             conn.close()

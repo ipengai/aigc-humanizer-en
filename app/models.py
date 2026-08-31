@@ -151,6 +151,7 @@ class Order:
                 word_count INTEGER,
                 price REAL,
                 mode TEXT DEFAULT 'low',
+                detector_backend TEXT,
                 original_score REAL,
                 rewritten_score REAL,
                 status TEXT DEFAULT 'pending',
@@ -214,6 +215,8 @@ class Order:
             conn.execute("ALTER TABLE orders ADD COLUMN document_error TEXT")
         if 'document_updated_at' not in columns:
             conn.execute("ALTER TABLE orders ADD COLUMN document_updated_at TEXT")
+        if 'detector_backend' not in columns:
+            conn.execute("ALTER TABLE orders ADD COLUMN detector_backend TEXT")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_alipay_trade_no "
             "ON orders(alipay_trade_no) WHERE alipay_trade_no IS NOT NULL"
@@ -410,7 +413,7 @@ class Order:
 
     @classmethod
     def update_result(cls, conn, order_id, rewritten_text, rewritten_score, original_score=None,
-                      rewritten_paragraphs=None):
+                      rewritten_paragraphs=None, detector_backend=None):
         """Update order with rewrite result (called after humanization completes)."""
         import json
         paragraphs_json = json.dumps(
@@ -418,27 +421,29 @@ class Order:
         ) if rewritten_paragraphs else None
         if original_score is not None:
             conn.execute(
-                """UPDATE orders 
-                   SET rewritten_text = ?, 
-                       rewritten_score = ?, 
+                """UPDATE orders
+                   SET rewritten_text = ?,
+                       rewritten_score = ?,
                        original_score = ?,
                        rewritten_paragraphs = ?,
+                       detector_backend = ?,
                        status = 'completed'
                    WHERE order_id = ?""",
-                (rewritten_text, rewritten_score, original_score, paragraphs_json, order_id)
+                (rewritten_text, rewritten_score, original_score, paragraphs_json,
+                 detector_backend, order_id)
             )
         else:
             conn.execute(
-                """UPDATE orders 
-                   SET rewritten_text = ?, 
-                       rewritten_score = ?, 
+                """UPDATE orders
+                   SET rewritten_text = ?,
+                       rewritten_score = ?,
                        rewritten_paragraphs = ?,
+                       detector_backend = ?,
                        status = 'completed'
                    WHERE order_id = ?""",
-                (rewritten_text, rewritten_score, paragraphs_json, order_id)
+                (rewritten_text, rewritten_score, paragraphs_json, detector_backend, order_id)
             )
         conn.commit()
-
     @classmethod
     def mark_failed(cls, conn, order_id):
         """Mark order as failed when background rewrite encounters an error."""

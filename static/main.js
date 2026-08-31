@@ -394,6 +394,159 @@ function finishBalanceRewrite(result, balanceRemaining, orderId) {
     }
 }
 
+/* ========== REWRITE FEEDBACK ========== */
+function openLatestFeedback() {
+    if (!latestResult?.orderId) {
+        showToast('暂未找到可反馈的改写任务', 'error');
+        return;
+    }
+    openFeedbackModal(latestResult.orderId);
+}
+
+async function openFeedbackModal(orderId) {
+    closeFeedbackModal();
+
+    let existing = null;
+    try {
+        const resp = await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+            credentials: 'same-origin',
+            cache: 'no-store'
+        });
+        if (resp.ok) {
+            const data = await resp.json();
+            existing = data.feedback || null;
+        }
+    } catch (_) {
+        // The feedback form remains usable even when prefill cannot be loaded.
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'feedback-modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+        <div class="modal feedback-modal">
+            <button class="modal-close" type="button" onclick="closeFeedbackModal()" aria-label="关闭反馈窗口">&times;</button>
+            <div class="modal-body">
+                <div class="modal-icon">💬</div>
+                <h3 class="modal-title">反馈本次改写结果</h3>
+                <p class="feedback-intro">反馈用于定位产品问题和优化算法，不包含免费逐段人工改写。订单：${escapeHtml(orderId)}</p>
+                <form class="feedback-form" id="rewrite-feedback-form" onsubmit="submitRewriteFeedback(event, '${escapeHtml(orderId)}')">
+                    <div class="feedback-options">
+                        <label class="feedback-option"><input type="radio" name="issue_type" value="satisfied">效果符合预期</label>
+                        <label class="feedback-option"><input type="radio" name="issue_type" value="high_ai_score">AI 率仍然较高</label>
+                        <label class="feedback-option"><input type="radio" name="issue_type" value="content_disorder">内容或结构错乱</label>
+                        <label class="feedback-option"><input type="radio" name="issue_type" value="meaning_changed">原意发生改变</label>
+                        <label class="feedback-option"><input type="radio" name="issue_type" value="details_lost">标题、数据或术语丢失</label>
+                        <label class="feedback-option"><input type="radio" name="issue_type" value="other">其他问题</label>
+                    </div>
+                    <div class="feedback-row">
+                        <div class="feedback-field">
+                            <label for="feedback-detector">实际检测平台（选填）</label>
+                            <select class="auth-input" id="feedback-detector" name="detector_platform">
+                                <option value="">未检测 / 不填写</option>
+                                <option value="Turnitin">Turnitin</option>
+                                <option value="GPTZero">GPTZero</option>
+                                <option value="ZeroGPT">ZeroGPT</option>
+                                <option value="Originality.ai">Originality.ai</option>
+                                <option value="其他">其他平台</option>
+                            </select>
+                        </div>
+                        <div class="feedback-field">
+                            <label for="feedback-score">实际 AI 率（选填）</label>
+                            <input class="auth-input" id="feedback-score" name="external_score" type="number" min="0" max="100" step="0.1" placeholder="例如 36.5">
+                        </div>
+                    </div>
+                    <div class="feedback-field">
+                        <label for="feedback-comment">问题说明（选填）</label>
+                        <textarea class="auth-input" id="feedback-comment" name="comment" maxlength="1000" placeholder="例如：开头两段结构被打乱，或检测后仍为 48%"></textarea>
+                    </div>
+                    <div class="feedback-field">
+                        <label for="feedback-screenshot">检测截图（选填，PNG/JPG/WEBP，最大 5MB）</label>
+                        <input class="auth-input" id="feedback-screenshot" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp">
+                    </div>
+                    <label class="feedback-contact">
+                        <input type="checkbox" id="feedback-contact-allowed">
+                        <span>如需进一步了解问题，同意 Huma 通过注册邮箱联系我。未勾选时只记录反馈，不主动联系。</span>
+                    </label>
+                    <div class="feedback-error" id="feedback-error"></div>
+                    <button class="btn btn-primary btn-full" id="feedback-submit" type="submit">提交反馈</button>
+                </form>
+            </div>
+        </div>`;
+
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeFeedbackModal();
+    });
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    if (existing) {
+        const radio = overlay.querySelector(`input[name="issue_type"][value="${existing.issue_type}"]`);
+        if (radio) radio.checked = true;
+        overlay.querySelector('#feedback-detector').value = existing.detector_platform || '';
+        overlay.querySelector('#feedback-score').value = existing.external_score ?? '';
+        overlay.querySelector('#feedback-comment').value = existing.comment || '';
+        overlay.querySelector('#feedback-contact-allowed').checked = Boolean(existing.contact_allowed);
+        overlay.querySelector('#feedback-submit').textContent = '更新反馈';
+    }
+}
+
+function closeFeedbackModal() {
+    const overlay = document.getElementById('feedback-modal-overlay');
+    if (overlay) overlay.remove();
+    if (!document.querySelector('.modal-overlay[style*="display: flex"]')) {
+        document.body.style.overflow = '';
+    }
+}
+
+async function submitRewriteFeedback(event, orderId) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const errorEl = form.querySelector('#feedback-error');
+    const submitBtn = form.querySelector('#feedback-submit');
+    const selected = form.querySelector('input[name="issue_type"]:checked');
+    errorEl.textContent = '';
+    if (!selected) {
+        errorEl.textContent = '请选择最符合本次结果的一项';
+        return;
+    }
+
+    const screenshot = form.querySelector('#feedback-screenshot').files[0];
+    if (screenshot && screenshot.size > 5 * 1024 * 1024) {
+        errorEl.textContent = '截图不能超过 5MB';
+        return;
+    }
+
+    const payload = new FormData(form);
+    payload.set('issue_type', selected.value);
+    payload.set(
+        'contact_allowed',
+        String(form.querySelector('#feedback-contact-allowed').checked)
+    );
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '提交中...';
+    try {
+        const resp = await _csrfFetch(`/api/orders/${encodeURIComponent(orderId)}/feedback`, {
+            method: 'POST',
+            body: payload
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || '反馈提交失败');
+
+        document.querySelectorAll(`[data-feedback-order="${orderId}"]`).forEach(button => {
+            button.textContent = '✅ 已反馈';
+        });
+        closeFeedbackModal();
+        showToast(data.message || '感谢反馈', 'success');
+    } catch (error) {
+        errorEl.textContent = error.message || '反馈提交失败，请稍后重试';
+        submitBtn.disabled = false;
+        submitBtn.textContent = '提交反馈';
+    }
+}
+
 /* ========== FAQ ACCORDION ========== */
 document.querySelectorAll('.faq-question').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -493,6 +646,7 @@ function renderOrders(orders, total, page, pages) {
         const actions = isCompleted ? `
             <button class="btn btn-outline btn-sm" onclick="viewOrderDetail('${o.order_id}')">查看详情</button>
             <button class="btn btn-outline btn-sm" onclick="reDownload('${o.order_id}', '${o.original_format === 'pdf' ? 'docx' : (o.original_format || 'txt')}', this)">⬇️ 下载</button>
+            <button class="btn btn-outline btn-sm" data-feedback-order="${o.order_id}" onclick="openFeedbackModal('${o.order_id}')">${o.has_feedback ? '✅ 已反馈' : '💬 反馈结果'}</button>
         ` : '';
 
         return `

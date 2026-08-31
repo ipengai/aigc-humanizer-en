@@ -1,5 +1,31 @@
 # 运维脚本
 
+## 导出检测前后对比数据
+
+`export_detector_comparisons.py` 以只读方式解析 `orders` 表，将完整的改写前后
+文本、AI 率、分数变化、长度、去重哈希及检测后端可信度导出为 JSONL。输出不会
+包含用户 ID、邮箱、文件名或支付信息，默认写入已被 Git 忽略的 `instance/` 目录。
+
+```bash
+# 使用默认数据库 instance/aigc_humanizer.db
+python3 scripts/export_detector_comparisons.py
+
+# 指定线上数据库、时间范围和输出文件
+python3 scripts/export_detector_comparisons.py \
+  --db /path/to/aigc_humanizer.db \
+  --since 2026-08-01T00:00:00+00:00 \
+  --output /secure/path/detector_comparisons.jsonl
+```
+
+旧订单没有保存检测后端，因此默认标记为 `unknown_legacy`，不会被标成可直接使用
+的 Sapling 弱标签。人工核实指定时间范围内线上始终使用 Sapling 后，可以显式使用：
+
+```bash
+python3 scripts/export_detector_comparisons.py --trust-legacy-sapling
+```
+
+如果只需要统计、哈希和分数，不希望输出正文，可增加 `--redact-text`。
+
 ## 飞书个人告警
 
 `feishu_alert.py` 使用企业自建应用机器人给指定人员发送单聊消息，并可追加应用内加急或电话加急。

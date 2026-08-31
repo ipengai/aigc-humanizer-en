@@ -24,7 +24,7 @@
 
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260824-5') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260831-1') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Baidu Tongji -->
@@ -87,11 +87,10 @@
                     <div class="hero-mono">
                         <span class="huma-h">H</span><span class="huma-uma">uma</span>
                     </div>
-                    <div class="hero-tagline">让内容更自然，轻松通过检测</div>
+                    <div class="hero-tagline">让内容更自然，降低 AI 写作特征</div>
                     <p class="hero-subtitle">
                         上传英文文件或粘贴文字，一键改写。支持标准、快速、精细三种不同模式。<br>
-                        精准改写、保留原意，
-                        轻松通过 Turnitin、GPTZero 等主流检测平台。
+                        以常见检测场景低于 20% 为优化目标，实际结果以目标平台为准。
                     </p>
                 </div>
                 <div class="hero-upload" id="upload-area">
@@ -107,6 +106,7 @@
                             </div>
                             <p class="drop-text">拖拽文档到此处，或 <span class="drop-link">点击选择文件</span></p>
                             <p class="drop-hint">支持 .docx、.pdf、.txt、.md，最大 20MB</p>
+                            <p class="drop-help">💡 详细使用方法见 <a href="/faq">使用帮助</a></p>
                             <input type="file" id="file-input" accept=".docx,.pdf,.txt,.md" hidden>
                         </div>
 
@@ -131,6 +131,10 @@
                                 </div>
                             </div>
                             <p class="upload-note">下拉可选择不同改写模式</p>
+                            <div class="expectation-note">
+                                <strong>效果说明</strong>
+                                <span>不同原文类型、篇幅和检测平台可能产生不同结果，Huma 暂不承诺固定 AI 率。建议先使用免费额度测试，改写后请复核结构、术语、数据与引用。</span>
+                            </div>
                         </div>
                     </form>
                 </div>
@@ -204,6 +208,7 @@
                         </div>
                         <div class="recharge-options" id="recharge-options"></div>
                         <p class="payment-note">💡 充值到账后将自动扣除本次用量并开始改写</p>
+                        <p class="payment-expectation">效果受原文及检测平台影响，暂不承诺固定 AI 率；建议先用免费额度测试。</p>
                     </div>
 
                     <!-- Right column: QR code -->
@@ -383,7 +388,9 @@
             <div class="rewrite-actions">
                 <button class="btn btn-primary" onclick="copyResult()">📋 复制改写结果</button>
                 <button class="btn btn-outline" id="download-btn" onclick="downloadResult()">⬇️ 下载</button>
+                <button class="btn btn-outline" id="latest-feedback-btn" onclick="openLatestFeedback()">💬 反馈本次结果</button>
             </div>
+            <p class="feedback-boundary">反馈用于异常复核和产品优化，不包含免费逐段人工改写。</p>
         </div>
     </section>
 
@@ -448,7 +455,8 @@
                         <li>✓ 段落级分析</li>
                         <li>✓ 修改建议生成</li>
                         <li>✓ 全文自动降 AI 改写</li>
-                        <li>✓ 不达标退款保障</li>
+                        <li>✓ 以常见检测场景低于 20% 为优化目标</li>
+                        <li class="pricing-disclaimer">结果因原文与检测平台而异，暂不承诺固定 AI 率</li>
                     </ul>
                     <button class="btn btn-primary btn-full" onclick="scrollToUpload()">立即使用</button>
                 </div>

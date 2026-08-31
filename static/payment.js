@@ -555,6 +555,11 @@ function displayRewriteResult(data) {
         originalFormat: origFormat,
         originalFilename: data.original_filename || sessionStorage.getItem('lastOriginalFilename') || 'humanized'
     };
+    const feedbackBtn = document.getElementById('latest-feedback-btn');
+    if (feedbackBtn) {
+        feedbackBtn.dataset.feedbackOrder = data.order_id;
+        feedbackBtn.textContent = '💬 反馈本次结果';
+    }
 
     // Update download button text with format hint
     const fmt = latestResult.originalFormat;

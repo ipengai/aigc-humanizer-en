@@ -9,7 +9,7 @@
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://{{ request.host }}/faq">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260824-5') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260825-3') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Baidu Tongji -->
@@ -68,6 +68,7 @@
                         <button class="help-nav-item active" id="tab-guide" data-tab="guide" onclick="switchHelpTab('guide')">产品使用流程</button>
                         <button class="help-nav-item" id="tab-tips" data-tab="tips" onclick="switchHelpTab('tips')">使用技巧 &amp; 注意事项</button>
                         <button class="help-nav-item" id="tab-faq" data-tab="faq" onclick="switchHelpTab('faq')">常见问题</button>
+                        <button class="help-nav-item" id="tab-changelog" data-tab="changelog" onclick="switchHelpTab('changelog')">产品更新日志</button>
                     </nav>
                 </aside>
                 <div class="help-content">
@@ -77,6 +78,16 @@
                 <div class="help-card">
                     <h2 class="help-title">产品使用流程</h2>
                     <p class="help-lead">登录 huma.ipengai.cn 后，按以下步骤即可完成英文论文/报告的 AI 痕迹优化。</p>
+
+                    <div class="help-note help-scope">
+                        <strong>🧭 改写适用场景与须知</strong>
+                        <ul>
+                            <li><strong>适合整体降低 AI 痕迹</strong>的英文论文/报告改写，对通用学术写作风格的自然化效果最明显。</li>
+                            <li>如果你有<strong>特定的检测器目标</strong>（或非 Turnitin 的判定标准），Huma 默认按通用策略改写，<strong>无法保证在目标平台一定达标</strong>，请改写后用目标平台复核。</li>
+                            <li>学术论文中<strong>特定的专有名词</strong>（机构名、标准、型号、人名、数据引用）<strong>无法保证不被改写</strong>，请在交付前人工核对一遍。</li>
+                            <li>改写后<strong>段落长短、句式与篇幅会发生变化</strong>，可能与原文不完全一致，属正常现象。</li>
+                        </ul>
+                    </div>
 
                     <div class="steps">
                         <div class="step">
@@ -90,7 +101,8 @@
                             <div class="step-num">2</div>
                             <div class="step-body">
                                 <h3>粘贴或上传文本</h3>
-                                <p>可直接<strong>复制粘贴文本</strong>，也可<strong>上传文档</strong>，支持 <strong>txt、docx、pdf</strong> 格式。需要保留标题与排版时，请使用 .docx 上传。</p>
+                                <p>可直接<strong>复制粘贴文本</strong>，也可<strong>上传文档</strong>，支持 <strong>txt、docx</strong> 等格式。需要保留标题与排版时，请使用 .docx 上传，并将文档标题、图表标题等段落格式设置好。</p>
+                                <p class="step-tip">💡 Word 建议只上传正文内容，封面、附录等无关信息不建议上传，可能影响改写效果。</p>
                             </div>
                         </div>
                         <div class="step">
@@ -98,6 +110,7 @@
                             <div class="step-body">
                                 <h3>点击「一键改写」</h3>
                                 <p>点击按钮，系统将自动完成改写与润色。改写基于「LLM 改写 + 算法后处理」两段式架构，进行结构级重构。</p>
+                                <p class="step-tip">🤔 也可先在页面上选择<strong>不同的改写模式</strong>，适配改写强度或语气的偏好；没有特别需求时，<strong>使用默认模式即可</strong>，效果已针对绝大多数场景优化。</p>
                             </div>
                         </div>
                         <div class="step">
@@ -118,7 +131,7 @@
                             <div class="step-num">6</div>
                             <div class="step-body">
                                 <h3>下载结果</h3>
-                                <p>确认无误后，点击<strong>「下载」</strong>即可获取改写后的结果文件，直接用于后续提交。</p>
+                                <p>确认无误后，点击<strong>「下载」</strong>即可获取改写后的结果文件。下载后请<strong>再进行人工检查</strong>，重点核对专有名词、术语、数据等是否完好，必要时手动修复后再使用。</p>
                             </div>
                         </div>
                     </div>
@@ -151,11 +164,6 @@
                             <div class="tip-icon">🗣️</div>
                             <h3>让文本像「人」写的</h3>
                             <p>改写会营造人类写作的不规则性：长短句交错、一句承载一个信息点，并在合适语境注入反问、口语化与个人化细节。</p>
-                        </div>
-                        <div class="tip-item">
-                            <div class="tip-icon">📖</div>
-                            <h3>学术核心安全保留</h3>
-                            <p>坚持「改好」而非「改错」：语法完全正确、专有名词与核心事实原样保留、可读性只升不降，无需担心内容被破坏。</p>
                         </div>
                     </div>
 
@@ -201,7 +209,7 @@
                         <div class="faq-item">
                             <button class="faq-question"><span>修改后会影响原文意思吗？</span><span class="faq-arrow" aria-hidden="true">⌄</span></button>
                             <div class="faq-answer">
-                                <p>不会。我们的改写引擎专注于降低 AI 写作特征——替换 AI 常用短语、增加句式变化、优化词汇多样性。学术术语、专业名词、数据引用等核心内容都会被保留。每次改写后你可以复查对比原文和改写结果。</p>
+                                <p>不会。改写引擎专注于降低 AI 写作特征——替换 AI 常用短语、增加句式变化、优化词汇多样性。但<strong>学术术语、专有名词、数据引用等细节无法保证完全不被改写</strong>，请在交付前复查对比原文，必要时手动微调。</p>
                             </div>
                         </div>
                         <div class="faq-item">
@@ -221,6 +229,51 @@
                             <div class="faq-answer">
                                 <p>所有传输采用 SSL 加密，文档仅用于完成当前检测与改写请求。改写时正文会发送给当前配置的第三方处理服务，具体数据政策以对应服务商条款为准；上传的临时文件会按系统清理策略删除。</p>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Panel 4: 产品更新日志（后续迭代在此追加） -->
+            <div class="help-panel" id="panel-changelog">
+                <div class="help-card">
+                    <h2 class="help-title">产品更新日志</h2>
+                    <p class="help-lead">这里汇总 Huma 的功能迭代与版本更新，我们会持续维护更新。</p>
+
+                    <div class="changelog">
+                        <div class="cl-item">
+                            <div class="cl-date">2026-08-25</div>
+                            <ul class="cl-list">
+                                <li>📖 新增「使用帮助」页面：产品使用流程、使用技巧与注意事项、常见问题三大板块独立呈现，查阅更清晰。</li>
+                                <li>🧭 导航优化：FAQ 从首页迁移至独立帮助页，首页与订单页统一入口。</li>
+                            </ul>
+                        </div>
+                        <div class="cl-item">
+                            <div class="cl-date">2026-08-24</div>
+                            <ul class="cl-list">
+                                <li>⚙️ 改写引擎优化：短段落自动聚合、逐块处理与异常自动切换，长文档改写更稳定高效。</li>
+                                <li>🔧 修复：超长文档「改写前后对比」超高亮无法显示的问题。</li>
+                                <li>📝 定价与帮助文案更新：达标率与改写预期说明更贴合实际。</li>
+                            </ul>
+                        </div>
+                        <div class="cl-item">
+                            <div class="cl-date">2026-08-08</div>
+                            <ul class="cl-list">
+                                <li>✍️ 改写功能整体升级：一键改写、结构保护、检测与改写分离、下载格式修复，并新增改写模式选择。</li>
+                            </ul>
+                        </div>
+                        <div class="cl-item">
+                            <div class="cl-date">2026-07-15</div>
+                            <ul class="cl-list">
+                                <li>🎁 兑换码支持额度标识，统一更名为「兑换码」。</li>
+                                <li>💰 新增钱包充值、个人账户工作流。</li>
+                            </ul>
+                        </div>
+                        <div class="cl-item">
+                            <div class="cl-date">2026-06-26</div>
+                            <ul class="cl-list">
+                                <li>📊 接入站点统计分析，监测流量与关键事件。</li>
+                            </ul>
                         </div>
                     </div>
                 </div>

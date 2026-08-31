@@ -116,33 +116,57 @@ def api_orders():
     conn = get_db()
     per_page = 50
 
+    # ── 字段筛选（空值即不过滤）──
+    f_ps = (request.args.get('ps') or '').strip()
+    f_status = (request.args.get('status') or '').strip()
+    f_mode = (request.args.get('mode') or '').strip()
+    f_backend = (request.args.get('backend') or '').strip()
+
+    where = ["o.created_at >= ?", "o.created_at < ?"]
+    params = [start_iso, end_iso]
+    if f_ps:
+        where.append("o.payment_status = ?")
+        params.append(f_ps)
+    if f_status:
+        where.append("o.status = ?")
+        params.append(f_status)
+    if f_mode:
+        if f_mode == 'median':
+            where.append("o.mode IN ('median', 'academic')")
+        else:
+            where.append("o.mode = ?")
+            params.append(f_mode)
+    if f_backend:
+        where.append("o.detector_backend = ?")
+        params.append(f_backend)
+    where_sql = " AND ".join(where)
+
     try:
         # Total count
-        count_row = conn.execute(
-            "SELECT COUNT(*) as total FROM orders WHERE created_at >= ? AND created_at < ?",
-            (start_iso, end_iso)
-        ).fetchone()
-        total = count_row['total'] if count_row else 0
+        total = conn.execute(
+            "SELECT COUNT(*) as total FROM orders o WHERE " + where_sql,
+            params
+        ).fetchone()['total']
 
         # Summary stats
         paid_count = conn.execute(
-            "SELECT COUNT(*) as total FROM orders WHERE created_at >= ? AND created_at < ? AND payment_status = 'paid'",
-            (start_iso, end_iso)
+            "SELECT COUNT(*) as total FROM orders o "
+            "WHERE " + where_sql + " AND o.payment_status = 'paid'",
+            params
         ).fetchone()['total']
 
         total_revenue = conn.execute(
-            "SELECT COALESCE(SUM(price), 0) as total FROM orders "
-            "WHERE created_at >= ? AND created_at < ? AND payment_status = 'paid'",
-            (start_iso, end_iso)
+            "SELECT COALESCE(SUM(o.price), 0) as total FROM orders o "
+            "WHERE " + where_sql + " AND o.payment_status = 'paid'",
+            params
         ).fetchone()['total']
 
         # Status breakdown
         status_counts = {}
         for row in conn.execute(
-            "SELECT payment_status, COUNT(*) as cnt FROM orders "
-            "WHERE created_at >= ? AND created_at < ? "
-            "GROUP BY payment_status",
-            (start_iso, end_iso)
+            "SELECT o.payment_status, COUNT(*) as cnt FROM orders o "
+            "WHERE " + where_sql + " GROUP BY o.payment_status",
+            params
         ).fetchall():
             status_counts[row['payment_status']] = row['cnt']
 
@@ -152,12 +176,14 @@ def api_orders():
             """SELECT o.*, u.email as user_email
                FROM orders o
                LEFT JOIN users u ON o.user_id = u.id
-               WHERE o.created_at >= ? AND o.created_at < ?
+               WHERE """ + where_sql + """
                ORDER BY o.created_at DESC
                LIMIT ? OFFSET ?""",
-            (start_iso, end_iso, per_page, offset)
+            params + [per_page, offset]
         )
+
         orders = []
+
         for row in cursor.fetchall():
             order = dict(row)
             if order.get('original_text'):
@@ -277,6 +303,62 @@ def api_trends():
             'paid_orders': sum(paid_series),
             'revenue': round(sum(revenue_series), 2),
         },
+    })
+
+
+# ============================================================
+#  Rewrite Effect Statistics
+# ============================================================
+
+@admin_app.route('/admin/api/rewrite-stats')
+@login_required
+def api_rewrite_stats():
+    """改写效果统计：指定时间范围内，改写后 AI 率降到 20% 以下的比例。
+
+    只统计 status='completed' 且改写前后 AI 率均为有效分数（0-100）的订单。
+    """
+    start_date = request.args.get('start', '')
+    end_date = request.args.get('end', '')
+
+    try:
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return jsonify({'error': '请提供有效的日期，格式 YYYY-MM-DD'}), 400
+
+    if start_dt > end_dt:
+        return jsonify({'error': '开始日期不能晚于结束日期'}), 400
+
+    start_iso = datetime.combine(start_dt, datetime.min.time()).isoformat()
+    end_iso = datetime.combine(end_dt + timedelta(days=1), datetime.min.time()).isoformat()
+
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT mode, original_score, rewritten_score, created_at FROM orders "
+            "WHERE status = 'completed' "
+            "AND created_at >= ? AND created_at < ? "
+            "AND original_score IS NOT NULL AND rewritten_score IS NOT NULL "
+            "AND original_score BETWEEN 0 AND 100 AND rewritten_score BETWEEN 0 AND 100",
+            (start_iso, end_iso)
+        ).fetchall()
+    finally:
+        conn.close()
+
+    n = len(rows)
+    below20 = sum(1 for r in rows if r['rewritten_score'] < 20)
+    originals = [r['original_score'] for r in rows]
+    rewrites = [r['rewritten_score'] for r in rows]
+
+    return jsonify({
+        'start_date': start_date,
+        'end_date': end_date,
+        'sample_count': n,
+        'below20_count': below20,
+        'below20_ratio': round(below20 / n, 4) if n else 0,
+        'avg_original_score': round(sum(originals) / n, 1) if n else 0,
+        'avg_rewritten_score': round(sum(rewrites) / n, 1) if n else 0,
+        'avg_improvement': round((sum(originals) - sum(rewrites)) / n, 1) if n else 0,
     })
 
 
@@ -570,7 +652,13 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             cursor: pointer; white-space: nowrap;
         }
         .btn-preset:hover { background: #f1f5f9; border-color: #cbd5e1; }
-        .btn-preset.active { background: #eef2ff; color: #4f46e5; border-color: #4f46e5; }
+                .btn-preset.active { background: #eef2ff; color: #4f46e5; border-color: #4f46e5; }
+        .filter-select {
+            padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 8px;
+            font-size: 0.85rem; color: #1e293b; background: #fff; outline: none;
+            cursor: pointer;
+        }
+        .filter-select:focus { border-color: #4f46e5; }
         /* Summary cards */
         .summary {
             display: grid;
@@ -731,7 +819,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
     <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('orders')" id="tab-orders">📋 订单</button>
-        <button class="tab-btn" onclick="switchTab('trends')" id="tab-trends">📈 趋势</button>
+                <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats">📊 改写效果</button>
         <button class="tab-btn" onclick="switchTab('activation')" id="tab-activation">🎯 兑换码</button>
         <button class="tab-btn" onclick="switchTab('users')" id="tab-users">👤 用户</button>
     </div>
@@ -754,6 +842,42 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             <span style="font-size:0.8rem;color:#94a3b8;margin-left:auto;">
                 点击订单行展开/折叠详情
             </span>
+        </div>
+
+        <!-- Field filters -->
+        <div class="toolbar">
+            <label>筛选：</label>
+            <select id="f-payment" class="filter-select" onchange="applyFilter()">
+                <option value="">支付方式：全部</option>
+                <option value="paid">扫码已付</option>
+                <option value="balance">余额支付</option>
+                <option value="free">免费</option>
+                <option value="pending">待支付</option>
+                <option value="expired">已过期</option>
+                <option value="failed">支付失败</option>
+            </select>
+            <select id="f-status" class="filter-select" onchange="applyFilter()">
+                <option value="">任务状态：全部</option>
+                <option value="completed">已完成</option>
+                <option value="processing">处理中</option>
+                <option value="pending">待处理</option>
+                <option value="failed">处理失败</option>
+                <option value="expired">已过期</option>
+                <option value="awaiting_balance">余额待补足</option>
+            </select>
+            <select id="f-mode" class="filter-select" onchange="applyFilter()">
+                <option value="">改写方法：全部</option>
+                <option value="low">low</option>
+                <option value="median">median</option>
+                <option value="high">high</option>
+            </select>
+            <select id="f-backend" class="filter-select" onchange="applyFilter()">
+                <option value="">检测方法：全部</option>
+                <option value="sapling">Sapling</option>
+                <option value="rule_based">本地规则</option>
+                <option value="originality">Originality</option>
+            </select>
+            <button class="btn-preset" onclick="clearFilter()">清空筛选</button>
         </div>
 
         <div class="error-banner" id="error-banner" style="display:none;"></div>
@@ -809,6 +933,9 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                         <th>支付方式</th>
                         <th>支付状态</th>
                         <th>任务状态</th>
+                        <th>检测方法</th>
+                        <th>改写方法</th>
+                        <th>AI 率（原→改写）</th>
                         <th>创建时间</th>
                     </tr>
                 </thead>
@@ -897,6 +1024,59 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             <div class="empty">
                 <div class="empty-icon">📉</div>
                 <p>该时间范围暂无数据</p>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- ============ TAB: REWRITE EFFECT STATS ============ -->
+    <div class="tab-content" id="content-stats">
+    <div class="main">
+        <div class="toolbar">
+            <h2 style="font-size:1rem;font-weight:600;margin-right:16px;">📊 改写效果统计</h2>
+            <span style="font-size:0.85rem;color:#64748b;">统计所选时间范围内的改写完成记录，改写后 AI 率小于 20% 视为达标</span>
+        </div>
+        <div class="toolbar">
+            <label>时间范围：</label>
+            <input type="date" id="stats-date-start">
+            <span class="date-sep">至</span>
+            <input type="date" id="stats-date-end">
+            <button class="btn-query" onclick="loadStats()">查询</button>
+            <button class="btn-preset" onclick="setStatsPreset('7days')">近7天</button>
+            <button class="btn-preset" onclick="setStatsPreset('30days')">近30天</button>
+            <button class="btn-preset" onclick="setStatsPreset('thisMonth')">本月</button>
+            <button class="btn-preset" onclick="setStatsPreset('all')">全部</button>
+        </div>
+
+        <div class="error-banner" id="stats-error-banner" style="display:none;"></div>
+
+        <div class="summary" id="stats-summary" style="display:none;">
+            <div class="summary-card">
+                <div class="label">改写样本</div>
+                <div class="value" id="st-sample">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">达标 &lt;20%</div>
+                <div class="value" id="st-below20">0</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">达标比例</div>
+                <div class="value" id="st-ratio" style="color:#059669;">0%</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">平均降幅 (pp)</div>
+                <div class="value" id="st-improve">0</div>
+            </div>
+        </div>
+
+        <div class="loading" id="stats-loading" style="display:none;">
+            <div class="spinner"></div>
+            <div>加载中</div>
+        </div>
+        <div class="table-wrapper" id="stats-empty" style="display:none;">
+            <div class="empty">
+                <div class="empty-icon">📊</div>
+                <p>暂无改写完成记录</p>
             </div>
         </div>
     </div>
@@ -1044,6 +1224,23 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             completed: '已完成', processing: '处理中', pending: '待处理',
             failed: '处理失败', expired: '已过期', awaiting_balance: '余额待补足'
         };
+        const MODE_LABEL = {
+            low: 'low', median: 'median', high: 'high', academic: 'median'
+        };
+        const DETECTOR_LABEL = {
+            sapling: 'Sapling', originality: 'Originality', rule_based: '本地规则',
+            sapling_mock: 'Sapling(测试)', originality_mock: 'Originality(测试)'
+        };
+        function modeLabel(m) { return MODE_LABEL[m] || m || '未知'; }
+        function detectorLabel(d) { return DETECTOR_LABEL[d] || d || '未知'; }
+        function aiRateCell(o) {
+            if (o.original_score == null && o.rewritten_score == null) return '-';
+            const orig = o.original_score != null ? o.original_score + '%' : '-';
+            const rew = o.rewritten_score != null ? o.rewritten_score + '%' : '-';
+            const color = rew !== '-' && parseFloat(rew) < 20 ? '#059669' : '';
+            const style = 'font-size:0.82rem;white-space:nowrap;' + (color ? 'color:' + color + ';' : '');
+            return `<span style="${style}">${orig} → ${rew}</span>`;
+        }
 
         function fmtDate(d) {
             return d.toISOString().split('T')[0];
@@ -1053,6 +1250,9 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         const today = fmtDate(new Date());
         document.getElementById('date-start').value = today;
         document.getElementById('date-end').value = today;
+        // 改写效果统计默认看全部数据
+        document.getElementById('stats-date-start').value = '2026-01-01';
+        document.getElementById('stats-date-end').value = today;
 
         function setPreset(type) {
             const now = new Date();
@@ -1086,6 +1286,19 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             loadOrders();
         }
 
+        function applyFilter() {
+            currentPage = 1;
+            loadOrders();
+        }
+
+        function clearFilter() {
+            ['f-payment', 'f-status', 'f-mode', 'f-backend'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+            currentPage = 1;
+            loadOrders();
+        }
+
         function showError(msg) {
             const el = document.getElementById('error-banner');
             el.textContent = msg;
@@ -1109,9 +1322,14 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             document.getElementById('empty-state').style.display = 'none';
 
             try {
-                const resp = await fetch(
-                    `/admin/api/orders?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&page=${currentPage}`
-                );
+                const qs = new URLSearchParams({
+                    start: start, end: end, page: currentPage,
+                    ps: document.getElementById('f-payment').value,
+                    status: document.getElementById('f-status').value,
+                    mode: document.getElementById('f-mode').value,
+                    backend: document.getElementById('f-backend').value
+                });
+                const resp = await fetch('/admin/api/orders?' + qs.toString());
                 if (!resp.ok) {
                     const data = await resp.json();
                     throw new Error(data.error || '请求失败');
@@ -1168,13 +1386,17 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                     <td><span class="badge ${STATUS_BADGE[ps] || 'badge-pending'}">${paymentMethod}</span></td>
                     <td><span class="badge ${STATUS_BADGE[ps] || 'badge-pending'}">${STATUS_LABEL[ps] || ps}</span></td>
                     <td><span class="badge ${ORDER_STATUS_BADGE[ss] || 'badge-pending'}">${ORDER_STATUS_LABEL[ss] || ss}</span></td>
+                    <td>${detectorLabel(o.detector_backend)}</td>
+                    <td>${modeLabel(o.mode)}</td>
+                    <td>${aiRateCell(o)}</td>
                     <td style="font-size:0.78rem;color:#64748b;">${formatTime(o.created_at)}</td>
                 </tr>`;
                 html += `<tr class="row-detail" id="detail-${escapeHtml(o.order_id)}" style="display:none;">
-                    <td colspan="9">
+                    <td colspan="12">
                         <div class="detail-meta">
                             <span>文件: ${escapeHtml(o.original_filename || '-')}</span>
-                            <span>模式: ${escapeHtml(o.mode || 'academic')}</span>
+                            <span>改写方法: ${modeLabel(o.mode)}</span>
+                            <span>检测方法: ${detectorLabel(o.detector_backend)}</span>
                             <span>充值词数: ${o.recharge_words || '-'}</span>
                             <span>余额消耗: ${o.balance_words_used || '-'}</span>
                             <span>原始评分: ${o.original_score != null ? o.original_score + '%' : '-'}</span>
@@ -1262,6 +1484,74 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         if (tab === 'activation') loadActivationCodes();
         if (tab === 'users') loadUsers();
         if (tab === 'trends') loadTrends();
+        if (tab === 'stats') loadStats();
+    }
+
+    /* ========== REWRITE EFFECT STATS ========== */
+    async function loadStats() {
+        const loading = document.getElementById('stats-loading');
+        const summary = document.getElementById('stats-summary');
+        const empty = document.getElementById('stats-empty');
+        document.getElementById('stats-error-banner').style.display = 'none';
+
+        summary.style.display = 'none';
+        empty.style.display = 'none';
+        loading.style.display = 'block';
+
+        const start = document.getElementById('stats-date-start').value;
+        const end = document.getElementById('stats-date-end').value;
+        if (!start || !end) { renderStatsError('请选择时间范围'); return; }
+
+        let data;
+        try {
+            const resp = await fetch(
+                `/admin/api/rewrite-stats?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
+            );
+            data = await resp.json();
+        } catch (e) {
+            renderStatsError('加载失败: ' + e.message);
+            return;
+        }
+        loading.style.display = 'none';
+        if (data.error) { renderStatsError(data.error); return; }
+
+        document.getElementById('st-sample').textContent = data.sample_count.toLocaleString();
+        document.getElementById('st-below20').textContent = data.below20_count.toLocaleString();
+        document.getElementById('st-ratio').textContent = (data.below20_ratio * 100).toFixed(1) + '%';
+        document.getElementById('st-improve').textContent = data.avg_improvement.toFixed(1);
+        summary.style.display = 'grid';
+
+        if (data.sample_count === 0) { empty.style.display = 'block'; }
+    }
+
+    function setStatsPreset(type) {
+        const today = fmtDate(new Date());
+        const startEl = document.getElementById('stats-date-start');
+        const endEl = document.getElementById('stats-date-end');
+        if (type === 'all') {
+            startEl.value = '2026-01-01';
+            endEl.value = today;
+        } else if (type === '7days') {
+            const s = new Date(); s.setDate(s.getDate() - 6);
+            startEl.value = fmtDate(s); endEl.value = today;
+        } else if (type === '30days') {
+            const s = new Date(); s.setDate(s.getDate() - 29);
+            startEl.value = fmtDate(s); endEl.value = today;
+        } else if (type === 'thisMonth') {
+            const now = new Date();
+            startEl.value = fmtDate(new Date(now.getFullYear(), now.getMonth(), 1));
+            endEl.value = today;
+        }
+        document.querySelectorAll('#content-stats .btn-preset').forEach(b => b.classList.remove('active'));
+        event.target.classList.add('active');
+        loadStats();
+    }
+
+    function renderStatsError(msg) {
+        document.getElementById('stats-loading').style.display = 'none';
+        const banner = document.getElementById('stats-error-banner');
+        banner.textContent = msg;
+        banner.style.display = 'block';
     }
 
     /* ========== ACTIVATION CODES ========== */

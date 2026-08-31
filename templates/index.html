@@ -24,7 +24,7 @@
 
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260831-2') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260831-3') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Baidu Tongji -->
@@ -89,9 +89,9 @@
                     </div>
                     <div class="hero-tagline">让内容更自然，降低 AI 写作特征</div>
                     <p class="hero-subtitle">
-                        上传英文文件或粘贴文字，一键改写。支持标准、快速、精细三种不同模式。<br>
-                        以常见检测场景低于 20% 为优化目标，实际结果以目标平台为准。
+                        上传英文文件或粘贴文字，一键改写。支持标准、快速、精细三种不同模式。
                     </p>
+                    <div class="hero-expectation">⚠️ 低于 20% 是优化目标，不是固定承诺；建议先免费测试。</div>
                 </div>
                 <div class="hero-upload" id="upload-area">
                     <form id="upload-form" class="upload-card">
@@ -131,10 +131,6 @@
                                 </div>
                             </div>
                             <p class="upload-note">下拉可选择不同改写模式</p>
-                            <div class="expectation-note">
-                                <strong>效果说明</strong>
-                                <span>不同原文类型、篇幅和检测平台可能产生不同结果，Huma 暂不承诺固定 AI 率。建议先使用免费额度测试，改写后请复核结构、术语、数据与引用。</span>
-                            </div>
                         </div>
                     </form>
                 </div>

@@ -284,7 +284,20 @@ body {
     font-size: 0.9rem;
     color: var(--gray-500);
     line-height: 1.6;
-    margin-bottom: 32px;
+    margin-bottom: 14px;
+}
+
+.hero-expectation {
+    display: inline-flex;
+    align-items: center;
+    padding: 9px 13px;
+    border: 1px solid #fdba74;
+    border-radius: var(--radius-sm);
+    background: #fff7ed;
+    color: #c2410c;
+    font-size: 0.84rem;
+    font-weight: 600;
+    line-height: 1.45;
 }
 
 .hero-stats {
@@ -372,21 +385,6 @@ body {
 
 .upload-actions { margin-top: 20px; text-align: center; }
 .upload-note { font-size: 0.8rem; color: var(--gray-400); margin-top: 12px; }
-.expectation-note {
-    display: flex;
-    gap: 8px;
-    margin-top: 16px;
-    padding: 12px 14px;
-    border: 1px solid #dbeafe;
-    border-radius: var(--radius-sm);
-    background: #eff6ff;
-    color: #475569;
-    text-align: left;
-    font-size: 0.82rem;
-    line-height: 1.6;
-}
-.expectation-note strong { color: #1d4ed8; white-space: nowrap; }
-
 .btn-arrow { transition: transform 0.2s; }
 .btn-primary:hover .btn-arrow { transform: translateX(4px); }
 

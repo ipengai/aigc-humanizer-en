@@ -4,11 +4,13 @@ Alipay webhook handler, and test mock payment.
 """
 
 import logging
-from flask import Blueprint, request, jsonify, session
+import secrets
+from flask import Blueprint, request, jsonify, session, render_template, abort
 from app.extensions import limiter
 from app.helpers import (
     generate_order_id, get_db, login_required, process_payment_success
 )
+from app.products import get_product
 from config import PRICE_PER_1000_WORDS
 
 payment_bp = Blueprint('payment', __name__)
@@ -310,3 +312,157 @@ def api_test_mock_payment(order_id):
     except Exception:
         logging.exception("Mock payment processing failed")
         return jsonify({"error": "支付处理失败，请稍后重试"}), 500
+
+
+# ======================================================================
+# 通用商品交付层（阶段2：数字产品买断 + 网盘直链）
+# 以下端点均为「免登录」公开端点，商品买家不是 Huma 注册用户。
+# 复用现有支付宝 adapter（create_prepay_form）出动态二维码，
+# 支付成功后由 /api/webhook/alipay 统一回调，按 order_type 分流到 _deliver_product。
+# ======================================================================
+
+@payment_bp.route('/checkout')
+def checkout_page():
+    """
+    商品收银台页（免登录）。?
+
+    ?sku=agentteam_kit  -> 查 PRODUCTS 注册表 -> 建匿名订单 -> 调用支付宝出动态二维码
+    -> 渲染 checkout.html（展示二维码 + 轮询支付状态）。
+    """
+    from app.extensions import payment_adapter as adapter
+    from app.models import Order
+
+    sku = request.args.get('sku')
+    product = get_product(sku) if sku else None
+    if not product:
+        abort(404, description="商品不存在或已下架")
+
+    order_id = generate_order_id()
+    access_token = secrets.token_urlsafe(16)
+    conn = get_db()
+    try:
+        Order.create_product_order(conn, order_id, sku, float(product['price']), access_token)
+    except Exception:
+        logging.exception("Failed to create product order")
+        return jsonify({"error": "创建订单失败，请稍后重试"}), 500
+
+    subject = product['name']
+    result = adapter.create_prepay_form(order_id, float(product['price']), subject)
+    if result.get('error') and hasattr(adapter, 'create_prepay_order'):
+        logging.warning(
+            "checkout create_prepay_form failed (%s), falling back to create_prepay_order",
+            result.get('error'),
+        )
+        result = adapter.create_prepay_order(order_id, float(product['price']), subject)
+
+    qr_code = result.get('qr_code')
+    if qr_code:
+        Order.save_qr_code(conn, order_id, qr_code)
+
+    if result.get('error'):
+        logging.error("Product checkout adapter failed: %s", result.get('error'))
+        return jsonify({"error": "支付创建失败，请稍后重试"}), 500
+
+    return render_template(
+        'checkout.html',
+        product=product,
+        order_id=order_id,
+        access_token=access_token,
+        form_html=result.get('form_html') or '',
+        qr_code=qr_code or '',
+        poll_url=f"/api/product-status/{order_id}?token={access_token}",
+        delivery_url=f"/delivery/{order_id}?token={access_token}",
+    )
+
+
+@payment_bp.route('/api/product-status/<order_id>')
+@limiter.limit("20 per minute")
+def api_product_status(order_id):
+    """
+    商品订单状态轮询（免登录，token 保护）。
+
+    前端每 2s 轮询；支付成功（webhook 已处理）后返回 paid + delivery_link。
+    若 webhook 尚未到达，主动查支付宝网关兜底（与充值订单同逻辑）。
+    """
+    from app.extensions import payment_adapter as adapter
+    from app.models import Order
+    import json
+
+    token = request.args.get('token')
+    conn = get_db()
+    order = Order.get_by_order_id(conn, order_id)
+    if not order:
+        return jsonify({"error": "订单不存在"}), 404
+    if order.get('access_token') != token:
+        return jsonify({"error": "无权限访问该订单"}), 403
+    if order.get('order_type') != 'product':
+        return jsonify({"error": "非商品订单"}), 400
+
+    payment_status = order.get('payment_status', 'pending')
+
+    # webhook 未到达时主动查网关兜底（mock 模式始终 pending，靠测试端点触发）
+    if payment_status == 'pending':
+        try:
+            query_result = adapter.query_payment(order_id)
+            if query_result.get('status') == 'paid':
+                queried_order_id = query_result.get('order_id')
+                trade_no = query_result.get('trade_no')
+                amount = query_result.get('total_amount')
+                if queried_order_id == order_id and trade_no and amount is not None:
+                    process_payment_success(order_id, trade_no, amount)
+                    order = Order.get_by_order_id(conn, order_id)
+                    payment_status = order.get('payment_status', 'pending')
+        except Exception:
+            logging.warning("Product payment query failed", exc_info=True)
+
+    delivery_link = None
+    if payment_status == 'paid':
+        try:
+            payload = json.loads(order.get('delivery_payload') or '{}')
+            delivery_link = payload.get('delivery_link')
+        except (TypeError, ValueError):
+            delivery_link = None
+
+    return jsonify({
+        "order_id": order_id,
+        "payment_status": payment_status,
+        "delivery_link": delivery_link,
+    })
+
+
+@payment_bp.route('/delivery/<order_id>')
+def delivery_page(order_id):
+    """
+    商品交付页（免登录，token 保护）。
+
+    展示网盘直链供下载。token 不符返回 403，避免网盘链接被枚举泄露。
+    """
+    from app.models import Order
+    import json
+
+    token = request.args.get('token')
+    conn = get_db()
+    order = Order.get_by_order_id(conn, order_id)
+    if not order or order.get('access_token') != token:
+        abort(403, description="链接无效或已过期")
+    if order.get('order_type') != 'product':
+        abort(404, description="资源不存在")
+
+    delivery_link = None
+    product_name = None
+    try:
+        payload = json.loads(order.get('delivery_payload') or '{}')
+        delivery_link = payload.get('delivery_link')
+    except (TypeError, ValueError):
+        delivery_link = None
+    product = get_product(order.get('sku'))
+    product_name = product['name'] if product else "数字产品"
+
+    return render_template(
+        'delivery.html',
+        order_id=order_id,
+        product_name=product_name,
+        payment_status=order.get('payment_status'),
+        delivery_link=delivery_link,
+        poll_url=f"/api/product-status/{order_id}?token={token}",
+    )

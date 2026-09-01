@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>资料下载 - {{ product_name }}</title>
+  <style>
+    :root {
+      --bg: #faf9f6;
+      --ink: #141413;
+      --muted: #6b6a66;
+      --accent: #c96442;
+      --line: #e7e3dc;
+      --card: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                   "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      display: flex;
+      justify-content: center;
+      padding: 24px 16px 48px;
+    }
+    .wrap { width: 100%; max-width: 440px; }
+    .brand { text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 16px; }
+    .brand b { color: var(--accent); }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 32px 26px;
+      box-shadow: 0 2px 16px rgba(20,20,19,.04);
+      text-align: center;
+    }
+    .icon { font-size: 46px; line-height: 1; margin-bottom: 12px; }
+    .title { font-size: 20px; font-weight: 700; }
+    .sub { color: var(--muted); font-size: 14px; margin-top: 8px; line-height: 1.6; }
+    .divider { height: 1px; background: var(--line); margin: 24px 0; }
+    .dl-btn {
+      display: inline-block;
+      width: 100%;
+      padding: 15px 20px;
+      background: var(--accent);
+      color: #fff;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: 700;
+      border-radius: 12px;
+      transition: opacity .15s;
+    }
+    .dl-btn:hover { opacity: .9; }
+    .link-box {
+      margin-top: 14px;
+      word-break: break-all;
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      text-align: left;
+    }
+    .note { color: var(--muted); font-size: 12px; margin-top: 16px; line-height: 1.6; }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px; margin-right: 6px;
+      border: 2px solid var(--line); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand"><b>ipengAI</b> · 资料交付</div>
+    <div class="card">
+      {% if payment_status == 'paid' %}
+        <div class="icon">📦</div>
+        <div class="title">支付成功，资料已就绪</div>
+        <div class="sub">{{ product_name }}<br>点击下方按钮获取资料包</div>
+        <div class="divider"></div>
+        {% if delivery_link %}
+          <a class="dl-btn" href="{{ delivery_link }}" target="_blank" rel="noopener">↓ 获取资料包下载链接</a>
+          <div class="link-box">{{ delivery_link }}</div>
+        {% else %}
+          <div class="sub" style="color:var(--accent);font-weight:600;">
+            交付链接待配置，请凭订单号联系客服补发
+          </div>
+        {% endif %}
+        <div class="note">虚拟资料 · 不支持无理由退款 · 链接如有异常可联系补发</div>
+      {% else %}
+        <div class="icon"><span class="spinner"></span></div>
+        <div class="title">正在确认支付…</div>
+        <div class="sub">请稍候，系统正在核实您的付款<br>本页会自动刷新</div>
+        <div class="note">若已完成支付却长时间未跳转，请刷新本页或联系客服</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if payment_status != 'paid' %}
+  <script>
+    (function () {
+      var pollUrl = "{{ poll_url }}";
+      var timer = setInterval(function () {
+        fetch(pollUrl, { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.payment_status === 'paid') {
+              clearInterval(timer);
+              window.location.reload();
+            }
+          })
+          .catch(function () {});
+      }, 2000);
+    })();
+  </script>
+  {% endif %}
+</body>
+</html>

@@ -533,6 +533,11 @@ def process_payment_success(order_id, trade_no, paid_amount=None):
                 )
                 return False
 
+        # ===== 通用商品交付分支（阶段2：数字产品买断）=====
+        # 旧订单无 order_type 列 → get() 返回 None → 走充值逻辑，向后兼容。
+        if order.get('order_type') == 'product':
+            return _deliver_product(tx_conn, order, trade_no, paid_amount)
+
         user_id = order['user_id']
         recharge_words = int(order.get('recharge_words') or order['word_count'])
 
@@ -596,6 +601,40 @@ def process_payment_success(order_id, trade_no, paid_amount=None):
     # Submit rewrite to thread pool (don't block the webhook response)
     submit_rewrite_task(order_id, text, mode, paragraphs)
     recover_awaiting_balance_orders(user_id)
+    return True
+
+
+def _deliver_product(tx_conn, order, trade_no, paid_amount):
+    """
+    商品买断订单的支付成功处理：标记已支付 + 写入网盘交付直链。
+
+    与充值逻辑完全隔离——不碰 user 余额、不触发改写。
+    网盘链接来自 app.products.get_delivery_link(sku)（读 config，不硬编码）。
+    若链接尚未配置，仍标记 paid 但 delivery_link 为 None，交付页提示联系补发。
+    """
+    import json
+    from app.products import get_delivery_link
+
+    sku = order.get('sku')
+    delivery_link = get_delivery_link(sku) if sku else None
+    payload = json.dumps(
+        {"delivery_link": delivery_link, "sku": sku},
+        ensure_ascii=False
+    )
+    tx_conn.execute(
+        """UPDATE orders
+           SET payment_status = 'paid', status = 'delivered',
+               alipay_trade_no = ?, alipay_amount = ?, paid_at = ?,
+               delivery_payload = ?, delivery_status = 'delivered'
+           WHERE order_id = ? AND payment_status IN ('pending', 'expired')""",
+        (trade_no, paid_amount, datetime.now(timezone.utc).isoformat(),
+         payload, order['order_id'])
+    )
+    tx_conn.commit()
+    logging.info(
+        "Product order delivered: order_id=%s, sku=%s, has_link=%s",
+        order['order_id'], sku, bool(delivery_link),
+    )
     return True
 
 

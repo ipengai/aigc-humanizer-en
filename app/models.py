@@ -290,6 +290,24 @@ class Order:
         for name, column_type in analysis_columns.items():
             if name not in columns:
                 conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {column_type}")
+
+        # ── 通用商品交付层（阶段2：数字产品买断 + 网盘直链）──
+        # order_type: recharge=词数充值(旧逻辑) | product=数字产品买断
+        # sku: 商品注册表 sku（仅 product 类型有值）
+        # access_token: 匿名订单的鉴权令牌（保护交付页，防网盘链接枚举）
+        # delivery_payload: 支付成功后写入的 JSON，含 delivery_link
+        # delivery_status: pending | delivered
+        product_columns = {
+            'order_type': 'TEXT DEFAULT \'recharge\'',
+            'sku': 'TEXT',
+            'access_token': 'TEXT',
+            'delivery_payload': 'TEXT',
+            'delivery_status': 'TEXT',
+        }
+        for name, column_type in product_columns.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {column_type}")
+
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_alipay_trade_no "
             "ON orders(alipay_trade_no) WHERE alipay_trade_no IS NOT NULL"
@@ -539,6 +557,34 @@ class Order:
             (qr_code, order_id)
         )
         conn.commit()
+
+    @classmethod
+    def create_product_order(cls, conn, order_id, sku, price, access_token,
+                             expires_minutes=15):
+        """
+        创建一笔「数字产品买断」待支付订单（匿名，无登录）。
+
+        与 create_payment_record（词数充值）的区别：
+        - user_id 为 NULL（无需登录）
+        - order_type='product'，支付成功后走交付分支而非充词数
+        - 自带 access_token，用于保护后续交付页（防网盘链接枚举）
+        """
+        import secrets
+        created_at = datetime.now(timezone.utc).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)).isoformat()
+        if access_token is None:
+            access_token = secrets.token_urlsafe(16)
+        conn.execute(
+            """INSERT INTO orders
+               (user_id, order_id, original_text, word_count, price, mode,
+                status, payment_status, order_type, sku, access_token,
+                document_status, created_at, expires_at)
+               VALUES (NULL, ?, '', 0, ?, 'product', 'pending', 'pending',
+                       'product', ?, ?, 'not_applicable', ?, ?)""",
+            (order_id, price, sku, access_token, created_at, expires_at)
+        )
+        conn.commit()
+        return cls.get_by_order_id(conn, order_id)
 
     @classmethod
     def mark_paid(cls, conn, order_id, alipay_trade_no, paid_at):

@@ -3,6 +3,7 @@
 import logging
 
 from app.humanizer.adapter import HumanizerAdapter, _cfg
+from app.humanizer.events import REWRITE_FALLBACK_EVENT
 
 logger = logging.getLogger("app.humanizer.failover")
 
@@ -38,7 +39,9 @@ class FailoverHumanizer(HumanizerAdapter):
                 type(self.primary).__name__, type(self.fallback).__name__,
             )
             if progress_cb:
-                progress_cb(stage="rewrite", message="正在切换备用改写服务")
+                progress_cb(stage="rewrite",
+                            message="正在切换备用改写服务",
+                            event=REWRITE_FALLBACK_EVENT)
             try:
                 return self.fallback.humanize_structured(
                     text, mode=mode, paragraphs=paragraphs, progress_cb=progress_cb

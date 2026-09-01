@@ -268,6 +268,7 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
         改写或检测失败时向上抛异常，由调用方决定错误处理（余额回滚/标记失败）。
     """
     from app.extensions import humanizer_adapter, ai_detector as analyze_text
+    from app.humanizer.events import is_fallback_event
 
     # 进度：原文检测
     if original_analysis is None and progress_cb:
@@ -280,12 +281,14 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
         'whole_document_fallback': False,
     }
 
-    def _traced_progress(stage, block=None, total_blocks=None, message=""):
+    def _traced_progress(stage, block=None, total_blocks=None, message="",
+                         event=None):
         if total_blocks:
             execution_trace['rewrite_block_count'] = max(
                 execution_trace['rewrite_block_count'], int(total_blocks)
             )
-        if '备用改写服务' in (message or ''):
+        # 降级优先按结构化 event 判定，文案匹配仅作旧适配器兜底。
+        if is_fallback_event(event, message):
             if block is None:
                 execution_trace['whole_document_fallback'] = True
             else:
@@ -293,7 +296,7 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
         if progress_cb:
             progress_cb(
                 stage=stage, block=block, total_blocks=total_blocks,
-                message=message,
+                message=message, event=event,
             )
 
     humanized, rewritten_paragraphs = humanizer_adapter.humanize_structured(
@@ -360,7 +363,8 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
 
     paragraphs: 可选的段落结构（list[dict]，来自订单存储），用于结构保护。
     """
-    def _progress_cb(stage, block=None, total_blocks=None, message=""):
+    # event 等结构化字段仅用于埋点，不参与前端进度展示，此处忽略。
+    def _progress_cb(stage, block=None, total_blocks=None, message="", **extra):
         set_rewrite_progress(order_id, stage, block=block,
                              total_blocks=total_blocks, message=message)
 

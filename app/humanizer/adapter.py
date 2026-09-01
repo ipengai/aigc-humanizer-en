@@ -9,6 +9,7 @@ import threading
 from abc import ABC, abstractmethod
 
 from app.helpers.segmenter import segment as segment_paragraphs
+from app.humanizer.events import REWRITE_FALLBACK_EVENT
 
 logger = logging.getLogger("app.humanizer")
 
@@ -238,6 +239,7 @@ class HumanizerAdapter(ABC):
                     block=current_block,
                     total_blocks=len(rewrite_tasks),
                     message=f"第{current_block}块使用备用改写服务",
+                    event=REWRITE_FALLBACK_EVENT,
                 )
             try:
                 return fallback_rewriter(task["text"])

@@ -784,6 +784,24 @@ class RewriteFeedback:
         return dict(row) if row else None
 
     @classmethod
+    def get_order_ids_with_feedback(cls, conn, order_ids):
+        """批量返回已有反馈的 order_id 集合。
+
+        订单列表只需判断「是否已有反馈」，逐单调用 get_by_order_id 会造成
+        N+1 查询；此处用一条 IN 查询代替，列表页固定两次数据库往返。
+        """
+        order_ids = list(dict.fromkeys(order_ids or []))
+        if not order_ids:
+            return set()
+        placeholders = ','.join('?' for _ in order_ids)
+        rows = conn.execute(
+            f"SELECT order_id FROM rewrite_feedback "
+            f"WHERE order_id IN ({placeholders})",
+            tuple(order_ids),
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    @classmethod
     def get_issue_types(cls, feedback):
         """Return a normalized list for both legacy single-choice and new rows."""
         import json

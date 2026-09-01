@@ -29,11 +29,11 @@ def _init_database(path):
     return conn
 
 
-def _create_completed_order(conn):
+def _create_completed_order(conn, order_id='HUMA-TEST-1'):
     Order.create_processing_order(
         conn,
         user_id=1,
-        order_id='HUMA-TEST-1',
+        order_id=order_id,
         original_text='Heading Original text has five words.',
         original_format='docx',
         original_filename='paper.docx',
@@ -55,7 +55,7 @@ def _create_completed_order(conn):
     )
     Order.update_result(
         conn,
-        'HUMA-TEST-1',
+        order_id,
         'Rewritten body is deliberately longer than before.',
         rewritten_score=28,
         original_score=75,
@@ -203,6 +203,44 @@ class RewriteFeedbackTests(unittest.TestCase):
             self.assertEqual(feedback['contact_allowed'], 0)
         finally:
             conn.close()
+
+    def test_order_list_marks_feedback_with_a_single_batched_query(self):
+        conn = _init_database(self.db_path)
+        try:
+            _create_completed_order(conn, 'HUMA-TEST-1')
+            _create_completed_order(conn, 'HUMA-TEST-2')
+            RewriteFeedback.upsert(conn, 1, 'HUMA-TEST-2', ['high_ai_score'])
+
+            # 批量查询只返回已有反馈的订单，空入参不触发 SQL。
+            self.assertEqual(
+                RewriteFeedback.get_order_ids_with_feedback(
+                    conn, ['HUMA-TEST-1', 'HUMA-TEST-2']),
+                {'HUMA-TEST-2'},
+            )
+            self.assertEqual(
+                RewriteFeedback.get_order_ids_with_feedback(conn, []), set()
+            )
+        finally:
+            conn.close()
+
+        flask_app = Flask(__name__)
+        flask_app.secret_key = 'test-secret'
+        flask_app.config.update(TESTING=True, RATELIMIT_ENABLED=False)
+        flask_app.register_blueprint(orders_bp)
+        flask_app.teardown_appcontext(close_db)
+        limiter.init_app(flask_app)
+        client = flask_app.test_client()
+        with client.session_transaction() as sess:
+            sess['user_id'] = 1
+
+        with mock.patch('app.models.DB_PATH', str(self.db_path)):
+            response = client.get('/api/orders?per_page=50')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['total'], 2)
+        flags = {o['order_id']: o['has_feedback'] for o in payload['orders']}
+        self.assertEqual(flags, {'HUMA-TEST-1': False, 'HUMA-TEST-2': True})
 
     def test_admin_stats_include_system_and_user_reported_results(self):
         conn = _init_database(self.db_path)

@@ -33,12 +33,15 @@ def api_orders():
                   'status', 'payment_status',
                   'recharge_words', 'balance_words_used', 'balance_after',
                   'paid_at', 'created_at']
+    # 一次性取回本页已有反馈的订单，避免逐单查询（N+1）。
+    feedback_order_ids = RewriteFeedback.get_order_ids_with_feedback(
+        conn, [order['order_id'] for order in orders]
+    )
+
     orders_safe = []
     for order in orders:
         safe_order = {k: order[k] for k in _safe_keys if k in order}
-        safe_order['has_feedback'] = bool(
-            RewriteFeedback.get_by_order_id(conn, order['order_id'])
-        )
+        safe_order['has_feedback'] = order['order_id'] in feedback_order_ids
         orders_safe.append(safe_order)
 
     total_pages = max(1, (total + per_page - 1) // per_page)

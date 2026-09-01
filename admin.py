@@ -152,6 +152,13 @@ def api_orders():
     if f_backend:
         where.append("o.detector_backend = ?")
         params.append(f_backend)
+    f_type = (request.args.get('type') or '').strip()
+    if f_type:
+        where.append("o.order_type = ?")
+        params.append(f_type)
+        if f_type == 'product':
+            # 方案C: 数字产品 tab 不展示「待支付」订单（仅留已成交/异常单）
+            where.append("o.payment_status != 'pending'")
     where_sql = " AND ".join(where)
 
     try:
@@ -951,6 +958,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
     <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('orders')" id="tab-orders">📋 订单</button>
+        <button class="tab-btn" onclick="switchTab('agentteam')" id="tab-agentteam">🛒 AgentTeam</button>
                 <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats">📊 改写效果</button>
         <button class="tab-btn" onclick="switchTab('activation')" id="tab-activation">🎯 兑换码</button>
         <button class="tab-btn" onclick="switchTab('users')" id="tab-users">👤 用户</button>
@@ -1094,6 +1102,52 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 <div class="empty-icon">📭</div>
                 <p>该时间范围暂无订单</p>
             </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- ============ TAB: AGENTTEAM ============ -->
+    <div class="tab-content" id="content-agentteam">
+    <div class="main">
+        <div class="toolbar">
+            <label>时间范围：</label>
+            <input type="date" id="at-date-start">
+            <span class="date-sep">至</span>
+            <input type="date" id="at-date-end">
+            <button class="btn-query" onclick="loadAgentTeamOrders()">查询</button>
+            <button class="btn-preset" onclick="setAtPreset('7days')">近7天</button>
+            <button class="btn-preset" onclick="setAtPreset('30days')">近30天</button>
+            <button class="btn-preset" onclick="setAtPreset('all')">全部</button>
+        </div>
+
+        <div class="summary" id="at-summary" style="display:none;">
+            <div class="summary-card"><div class="label">订单总数</div><div class="value" id="at-total">0</div></div>
+            <div class="summary-card"><div class="label">已支付</div><div class="value" id="at-paid" style="color:#16a34a;">0</div></div>
+            <div class="summary-card"><div class="label">实收营收 (¥)</div><div class="value revenue" id="at-revenue">0.00</div></div>
+        </div>
+
+        <div class="loading" id="at-loading" style="display:none;"><div class="spinner"></div><div>加载中</div></div>
+
+        <div class="table-wrapper" id="at-table-wrapper" style="display:none;">
+            <div class="table-header"><h2>AgentTeam 购买记录</h2><span class="count-badge" id="at-count-badge">0 条</span></div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>订单号</th>
+                        <th>买家</th>
+                        <th>产品 (sku)</th>
+                        <th>金额</th>
+                        <th>支付状态</th>
+                        <th>创建时间</th>
+                        <th>交付链接</th>
+                    </tr>
+                </thead>
+                <tbody id="at-tbody"></tbody>
+            </table>
+        </div>
+
+        <div class="table-wrapper" id="at-empty" style="display:none;">
+            <div class="empty"><div class="empty-icon">📭</div><p>该时间范围暂无 AgentTeam 订单</p></div>
         </div>
     </div>
     </div>
@@ -1391,6 +1445,10 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             paid: '扫码充值', pending: '扫码充值', expired: '扫码充值',
             failed: '扫码充值', balance: '余额支付', free: '免费'
         };
+        // 数字产品 sku -> 展示名（方案C: 后台区分 AgentTeam 等商品订单）
+        const PRODUCT_LABEL = {
+            'agentteam_kit': 'AgentTeam 模板包'
+        };
         const ORDER_STATUS_BADGE = {
             completed: 'badge-completed', processing: 'badge-processing',
             pending: 'badge-pending', failed: 'badge-failed', expired: 'badge-expired',
@@ -1440,6 +1498,9 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         const today = fmtDate(new Date());
         document.getElementById('date-start').value = today;
         document.getElementById('date-end').value = today;
+        // AgentTeam tab 默认看全部历史
+        document.getElementById('at-date-start').value = '2025-01-01';
+        document.getElementById('at-date-end').value = today;
         // 改写效果统计默认看全部数据
         document.getElementById('stats-date-start').value = '2026-01-01';
         document.getElementById('stats-date-end').value = today;
@@ -1570,7 +1631,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 }
                 html += `<tr class="row-order" onclick="toggleDetail('${escapeHtml(o.order_id)}')" id="row-${escapeHtml(o.order_id)}">
                     <td style="font-family:monospace;font-size:0.78rem;">${escapeHtml(o.order_id)}</td>
-                    <td>${escapeHtml(o.user_email || '游客')}</td>
+                    <td>${escapeHtml((o.order_type === 'product') ? ('游客·' + (o.sku || '数字产品') + (PRODUCT_LABEL[o.sku] ? '（' + PRODUCT_LABEL[o.sku] + '）' : '')) : (o.user_email || '游客'))}</td>
                     <td style="font-size:0.75rem;color:#64748b;">${escapeHtml(inputSourceLabel(o))}</td>
                     <td>${o.word_count || '-'}</td>
                     <td>${amountDisplay}</td>
@@ -1686,6 +1747,84 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
     <script>
     /* ========== TAB SWITCHING ========== */
+    /* ========== AGENTTEAM TAB ========== */
+    function setAtPreset(type) {
+        const now = new Date();
+        let start, end;
+        if (type === 'all') {
+            start = '2025-01-01'; end = fmtDate(now);
+        } else if (type === '7days') {
+            start = new Date(now); start.setDate(start.getDate() - 6);
+            start = fmtDate(start); end = fmtDate(now);
+        } else if (type === '30days') {
+            start = new Date(now); start.setDate(start.getDate() - 29);
+            start = fmtDate(start); end = fmtDate(now);
+        } else {
+            start = end = fmtDate(now);
+        }
+        document.getElementById('at-date-start').value = start;
+        document.getElementById('at-date-end').value = end;
+        loadAgentTeamOrders();
+    }
+
+    async function loadAgentTeamOrders() {
+        const start = document.getElementById('at-date-start').value;
+        const end = document.getElementById('at-date-end').value;
+        if (!start || !end) return;
+        document.getElementById('at-loading').style.display = 'block';
+        document.getElementById('at-table-wrapper').style.display = 'none';
+        document.getElementById('at-summary').style.display = 'none';
+        document.getElementById('at-empty').style.display = 'none';
+        try {
+            const qs = new URLSearchParams({
+                start: start, end: end, page: 1, type: 'product',
+                ps: '', status: '', method: '', mode: '', backend: ''
+            });
+            const resp = await fetch('/admin/api/orders?' + qs.toString());
+            if (!resp.ok) { const d = await resp.json(); throw new Error(d.error || '请求失败'); }
+            const data = await resp.json();
+            document.getElementById('at-total').textContent = data.summary.total_orders;
+            document.getElementById('at-paid').textContent = data.summary.paid_orders;
+            document.getElementById('at-revenue').textContent = data.summary.total_revenue.toFixed(2);
+            document.getElementById('at-summary').style.display = 'grid';
+            if (data.orders.length === 0) {
+                document.getElementById('at-empty').style.display = 'block';
+            } else {
+                document.getElementById('at-count-badge').textContent = data.summary.total_orders + ' 条';
+                document.getElementById('at-table-wrapper').style.display = 'block';
+                renderAgentTeamOrders(data.orders);
+            }
+        } catch (e) {
+            console.error('[agentteam]', e);
+        } finally {
+            document.getElementById('at-loading').style.display = 'none';
+        }
+    }
+
+    function renderAgentTeamOrders(orders) {
+        const tbody = document.getElementById('at-tbody');
+        let html = '';
+        for (const o of orders) {
+            const ps = o.payment_status || 'pending';
+            const sku = o.sku || '数字产品';
+            const amount = '¥' + (o.price || 0).toFixed(2);
+            const delivery = o.delivery_payload || '';
+            const deliveryCell = delivery
+                ? '<a href="' + escapeHtml(delivery) + '" target="_blank" rel="noopener">打开网盘链接</a>'
+                : '<span style="color:#94a3b8;">—</span>';
+            html += '<tr>'
+                + '<td style="font-family:monospace;font-size:0.78rem;">' + escapeHtml(o.order_id) + '</td>'
+                + '<td>游客</td>'
+                + '<td style="font-family:monospace;font-size:0.78rem;">' + escapeHtml(sku) + '</td>'
+                + '<td>' + amount + '</td>'
+                + '<td><span class="badge ' + (STATUS_BADGE[ps] || 'badge-pending') + '">' + (STATUS_LABEL[ps] || ps) + '</span></td>'
+                + '<td style="font-size:0.78rem;color:#64748b;">' + formatTime(o.created_at) + '</td>'
+                + '<td>' + deliveryCell + '</td>'
+                + '</tr>';
+        }
+        tbody.innerHTML = html;
+    }
+
     function switchTab(tab) {
         currentTab = tab;
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -1696,6 +1835,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         if (tab === 'users') loadUsers();
         if (tab === 'trends') loadTrends();
         if (tab === 'stats') loadStats();
+        if (tab === 'agentteam') loadAgentTeamOrders();
     }
 
     /* ========== REWRITE EFFECT STATS ========== */

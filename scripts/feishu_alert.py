@@ -1,151 +1,131 @@
 #!/usr/bin/env python3
-"""Send a personal Feishu alert, optionally with app or phone urgency."""
+"""Send a Feishu alert to the AgentTeam group via the local ``lark-cli``.
+
+复用 zzzheng 既有的飞书告警通道（work-utils / biz-coach 同款）：
+- 通过 ``lark-cli`` 以 ``qinglan`` 机器人身份发到 AgentTeam 群
+  ``oc_9a35aedfe15f5196ab6afee78a583f9f``，无需个人 open_id，也无需在
+  config.py 里放飞书应用凭证（凭证由 ``~/.lark-channel`` 的 profile 管理）。
+- 目标群 / 机器人 profile 可用环境变量或 config.py 覆盖：
+  ``FEISHU_ALERT_CHAT_ID``、``LARK_CHANNEL_PROFILE``。
+
+依赖：本机已安装 ``lark-cli`` 且 ``~/.lark-channel/profiles/<profile>`` 已配置。
+"""
 
 import argparse
 import json
 import os
+import subprocess
 import sys
-from urllib import error, parse, request
-
-
-FEISHU_BASE_URL = "https://open.feishu.cn/open-apis"
 
 
 class FeishuAlertError(RuntimeError):
     pass
 
 
-def _post_json(url, payload, token=None, method="POST", timeout=10):
-    headers = {"Content-Type": "application/json; charset=utf-8"}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    req = request.Request(
-        url,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers=headers,
-        method=method,
+DEFAULT_PROFILE = "qinglan"
+DEFAULT_CHAT_ID = "oc_9a35aedfe15f5196ab6afee78a583f9f"
+LARK_CLI = os.environ.get("LARK_CLI", "lark-cli").strip() or "lark-cli"
+
+
+def _resolve_target():
+    """返回 (profile, chat_id)，优先级：环境变量 > config.py > 默认值。"""
+    profile = (os.environ.get("LARK_CHANNEL_PROFILE") or "").strip()
+    chat_id = (os.environ.get("FEISHU_ALERT_CHAT_ID") or "").strip()
+    if not (profile and chat_id):
+        try:
+            _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            if _root not in sys.path:
+                sys.path.insert(0, _root)
+            import config  # noqa: F401 - 真实配置，已被 .gitignore 忽略
+            profile = profile or (getattr(config, "LARK_CHANNEL_PROFILE", "") or "").strip()
+            chat_id = chat_id or (getattr(config, "FEISHU_ALERT_CHAT_ID", "") or "").strip()
+        except Exception:
+            pass
+    return (
+        profile or DEFAULT_PROFILE,
+        chat_id or DEFAULT_CHAT_ID,
     )
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            body = response.read().decode("utf-8", errors="replace")
-    except error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise FeishuAlertError(
-            f"Feishu HTTP {exc.code}: {body[:500]}"
-        ) from exc
-    except (error.URLError, OSError) as exc:
-        raise FeishuAlertError(f"Feishu request failed: {exc}") from exc
-
-    try:
-        result = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise FeishuAlertError(
-            f"Feishu returned invalid JSON: {body[:500]}"
-        ) from exc
-    if result.get("code") != 0:
-        raise FeishuAlertError(
-            f"Feishu API error {result.get('code')}: {result.get('msg')}"
-        )
-    return result
 
 
-def get_tenant_access_token(app_id, app_secret):
-    result = _post_json(
-        f"{FEISHU_BASE_URL}/auth/v3/tenant_access_token/internal",
-        {"app_id": app_id, "app_secret": app_secret},
+def _lark_cli_env(profile):
+    home = os.path.expanduser(
+        os.environ.get("LARK_CHANNEL_HOME", "~/.lark-channel")
     )
-    token = result.get("tenant_access_token")
-    if not token:
-        raise FeishuAlertError("Feishu response did not contain tenant_access_token")
-    return token
-
-
-def send_personal_message(token, open_id, message):
-    query = parse.urlencode({"receive_id_type": "open_id"})
-    result = _post_json(
-        f"{FEISHU_BASE_URL}/im/v1/messages?{query}",
+    config_path = f"{home}/profiles/{profile}/lark-cli-source/config.json"
+    cli_config_dir = f"{home}/profiles/{profile}/lark-cli/lark-channel"
+    env = os.environ.copy()
+    env.update(
         {
-            "receive_id": open_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": message}, ensure_ascii=False),
-        },
-        token=token,
+            "LARK_CHANNEL": "1",
+            "LARK_CHANNEL_HOME": home,
+            "LARK_CHANNEL_PROFILE": profile,
+            "LARK_CHANNEL_CONFIG": config_path,
+            "LARKSUITE_CLI_CONFIG_DIR": cli_config_dir,
+        }
     )
-    message_id = (result.get("data") or {}).get("message_id")
-    if not message_id:
-        raise FeishuAlertError("Feishu response did not contain message_id")
-    return message_id
-
-
-def send_urgent(token, message_id, open_id, urgency):
-    if urgency not in ("app", "phone"):
-        return
-    query = parse.urlencode({"user_id_type": "open_id"})
-    _post_json(
-        f"{FEISHU_BASE_URL}/im/v1/messages/{message_id}/urgent_{urgency}?{query}",
-        {"user_id_list": [open_id]},
-        token=token,
-        method="PATCH",
-    )
-
-
-def _load_feishu_config():
-    """飞书凭证读取：环境变量优先，回退到项目 config.py。
-
-    config.py 是项目唯一配置文件（已被 .gitignore 忽略），凭证统一写在里面。
-    脚本把项目根目录加入 sys.path 后 import config，因此 cron 直接运行即可，
-    无需手动注入环境变量。环境变量仍可作为临时覆盖（便于多部署/测试）。
-    """
-    app_id = (os.environ.get("FEISHU_APP_ID") or "").strip()
-    app_secret = (os.environ.get("FEISHU_APP_SECRET") or "").strip()
-    open_id = (os.environ.get("FEISHU_ALERT_OPEN_ID") or "").strip()
-    if app_id and app_secret and open_id:
-        return app_id, app_secret, open_id
-    try:
-        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if _root not in sys.path:
-            sys.path.insert(0, _root)
-        import config  # noqa: F401 - config.py 含真实凭证，已被 gitignore
-        return (
-            (getattr(config, "FEISHU_APP_ID", "") or "").strip(),
-            (getattr(config, "FEISHU_APP_SECRET", "") or "").strip(),
-            (getattr(config, "FEISHU_ALERT_OPEN_ID", "") or "").strip(),
-        )
-    except Exception:
-        return "", "", ""
+    return env
 
 
 def send_alert(message, urgency="none"):
-    app_id, app_secret, open_id = _load_feishu_config()
-    missing = [
-        name for name, value in (
-            ("FEISHU_APP_ID", app_id),
-            ("FEISHU_APP_SECRET", app_secret),
-            ("FEISHU_ALERT_OPEN_ID", open_id),
-        ) if not value
-    ]
-    if missing:
-        raise FeishuAlertError(
-            "Missing Feishu credentials (checked env then config.py): "
-            + ", ".join(missing)
-        )
+    """Send ``message`` to the AgentTeam group via lark-cli.
 
-    token = get_tenant_access_token(app_id, app_secret)
-    message_id = send_personal_message(token, open_id, message)
-    send_urgent(token, message_id, open_id, urgency)
-    return message_id
+    ``urgency`` 当前为兼容保留参数；本机 lark-cli (1.0.x) 的群发接口不支持
+    应用内/电话加急，非 ``none`` 时仅打印提示并按普通消息发送。
+    """
+    profile, chat_id = _resolve_target()
+    env = _lark_cli_env(profile)
+    key = "huma-alert-" + __import__("datetime").datetime.now().strftime(
+        "%Y%m%d%H%M%S%f"
+    )
+    command = [
+        LARK_CLI,
+        "im",
+        "+messages-send",
+        "--as",
+        "bot",
+        "--chat-id",
+        chat_id,
+        "--text",
+        message,
+        "--idempotency-key",
+        key,
+    ]
+    if urgency not in (None, "none", ""):
+        print(
+            f"[feishu_alert] 警告：当前 lark-cli 群发不支持加急(urgency={urgency})，"
+            "已按普通消息发送。",
+            file=sys.stderr,
+        )
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False, env=env
+        )
+    except FileNotFoundError as exc:
+        raise FeishuAlertError(
+            f"lark-cli 未找到（LARK_CLI={LARK_CLI}）。请确认已安装并在 PATH 中。"
+        ) from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise FeishuAlertError(f"lark-cli 发送失败: {detail}")
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    if parsed.get("ok") is False:
+        raise FeishuAlertError(f"lark-cli 返回错误: {result.stdout}")
+    return (parsed.get("data") or {}).get("message_id")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Send a direct Feishu alert to the configured user."
+        description="Send a Feishu alert to the AgentTeam group via lark-cli."
     )
     parser.add_argument("message", help="Alert text")
     parser.add_argument(
         "--urgent",
         choices=("none", "app", "phone"),
         default="none",
-        help="Urgency type (default: none)",
+        help="兼容性保留参数，当前 lark-cli 群发不支持加急（默认 none）",
     )
     args = parser.parse_args()
     try:

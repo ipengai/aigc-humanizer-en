@@ -26,20 +26,33 @@ python3 scripts/export_detector_comparisons.py --trust-legacy-sapling
 
 如果只需要统计、哈希和分数，不希望输出正文，可增加 `--redact-text`。
 
-## 飞书个人告警
+## 飞书告警（AgentTeam 群）
 
-`feishu_alert.py` 使用企业自建应用机器人给指定人员发送单聊消息，并可追加应用内加急或电话加急。
+`feishu_alert.py` 复用 zzzheng 既有的飞书告警通道（与 work-utils / biz-coach 的
+`send_redlight` 同源）：通过本地 `lark-cli` 以 `qinglan` 机器人身份，把消息发到
+**AgentTeam 飞书群**（`oc_9a35aedfe15f5196ab6afee78a583f9f`）。
+
+- 无需个人 `open_id`，也无需在 `config.py` 里放飞书应用凭证——凭证由本机
+  `~/.lark-channel` 的 profile 管理（同 `send_redlight` 的机制）。
+- 这避开了「open_id 跨应用不认」的问题：早期版本用应用 IM API 发给个人，需要
+  取应用级 open_id 并开通通讯录权限；群发通道直接复用已配好的机器人，零额外授权。
 
 ### 配置
 
-凭证统一写在项目 `config.py`（见 `config.example.py`）。也可通过环境变量临时
-覆盖（优先级高于 config.py）：
+默认就发到 AgentTeam 群、用 `qinglan` profile，**通常无需任何配置**。仅在要换
+目标群或机器人时才在 `config.py`（或环境变量）覆盖：
 
-```bash
-export FEISHU_APP_ID='cli_xxx'
-export FEISHU_APP_SECRET='xxx'
-export FEISHU_ALERT_OPEN_ID='ou_xxx'
+```python
+# config.py
+FEISHU_ALERT_CHAT_ID = 'oc_9a35aedfe15f5196ab6afee78a583f9f'  # 目标群
+LARK_CHANNEL_PROFILE = 'qinglan'                                # lark-cli profile
 ```
+
+读取优先级：**环境变量 > config.py > 默认值**。环境变量名为
+`FEISHU_ALERT_CHAT_ID` / `LARK_CHANNEL_PROFILE`。
+
+前置依赖：本机已安装 `lark-cli`，且 `~/.lark-channel/profiles/qinglan` 已配置
+（与 `send_redlight` 共用）。
 
 ### 调用
 
@@ -47,14 +60,10 @@ export FEISHU_ALERT_OPEN_ID='ou_xxx'
 # 普通消息
 python3 scripts/feishu_alert.py '[Huma] 测试告警'
 
-# 应用内加急
-python3 scripts/feishu_alert.py '[Huma] 改写主服务已熔断' --urgent app
-
-# 电话加急
-python3 scripts/feishu_alert.py '[Huma] 主备改写服务全部失败' --urgent phone
+# --urgent 为兼容保留参数：当前 lark-cli 群发接口不支持应用内/电话加急，
+# 非 none 时仅打印提示并按普通消息发送
+python3 scripts/feishu_alert.py '[Huma] 测试' --urgent app
 ```
-
-应用需要启用机器人能力并发布版本，告警接收人必须位于应用可用范围内。应用还需要申请“以应用身份发送消息”以及对应的“发送应用内加急”或“发送电话加急”权限。电话加急会消耗企业额度。
 
 ## 改写兜底巡检
 
@@ -80,21 +89,18 @@ python3 scripts/check_fallback_orders.py --dry-run
 
 ### 配置（统一在 config.py）
 
-四个变量统一写在项目 `config.py`（与 `ALIPAY_*` / `LLM_*` 并列），部署时参照
-`config.example.py` 填入。该文件已被 `.gitignore` 忽略，凭证不会外泄。
+飞书部分默认无需配置（复用 qinglan 机器人 + AgentTeam 群）。如需覆盖目标群或
+机器人，在 `config.py`（与 `ALIPAY_*` / `LLM_*` 并列）填 `FEISHU_ALERT_CHAT_ID` /
+`LARK_CHANNEL_PROFILE`，参照 `config.example.py`。数据库路径：
 
 ```python
 # config.py
-FEISHU_APP_ID = 'cli_xxx'
-FEISHU_APP_SECRET = 'xxx'
-FEISHU_ALERT_OPEN_ID = 'ou_xxx'
 DB_PATH = os.path.join(PROJ_ROOT, 'instance', 'aigc_humanizer.db')
 ```
 
-读取优先级：**环境变量 > config.py**。因此也可通过 `FEISHU_*` /
-`HUMANIZER_DB_PATH` 环境变量临时覆盖（便于多部署或测试），无需改动 config.py。
-脚本会把项目根目录加入 `sys.path` 后 `import config`，所以 cron **直接运行即可，
-无需手动注入环境变量**。
+读取优先级：**环境变量 > config.py > 默认值**（`HUMANIZER_DB_PATH` 用于覆盖库路径，
+`FEISHU_ALERT_CHAT_ID` / `LARK_CHANNEL_PROFILE` 用于覆盖告警目标）。脚本会把项目根
+目录加入 `sys.path` 后 `import config`，所以 cron **直接运行即可，无需手动注入环境变量**。
 
 ### cron 部署
 
@@ -107,7 +113,7 @@ DB_PATH = os.path.join(PROJ_ROOT, 'instance', 'aigc_humanizer.db')
 
 - 默认增量去重，每天只报新增兜底订单，不会刷屏。
 - 想更高频盯主服务健康度，可加一条每 6 小时巡检：`0 */6 * * * ...`。
-- 需要电话/应用内加急时命令末尾加 `--urgent phone`（电话加急消耗企业额度）。
+- 告警发到 AgentTeam 飞书群（lark-cli 群发，当前不支持加急）。
 
 ## 文档文件清理
 

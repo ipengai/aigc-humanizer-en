@@ -95,11 +95,16 @@ def api_create_payment():
         # 保存段落结构（含 style/is_heading/is_reference），供异步改写做结构保护
         paragraphs = session.get('last_paragraphs')
         source_file_key = session.get('last_source_file_key')
+        analysis_context = dict(session.get('order_attribution') or {})
+        analysis_context['input_type'] = session.get('last_input_type') or (
+            'upload' if original_filename else 'paste'
+        )
         Order.create_payment_record(
             conn, user_id, order_id, text, original_format, original_filename,
             word_count, price, mode, recharge_words, min(balance, word_count),
             paragraphs=paragraphs,
-            source_file_key=source_file_key
+            source_file_key=source_file_key,
+            analysis_context=analysis_context,
         )
         logging.info(
             f"[PAYMENT] Recharge order created: {order_id}, user={user_id}, "

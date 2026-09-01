@@ -92,6 +92,10 @@ def api_rewrite():
         original_format = session.get('last_original_format', 'txt')
         original_filename = session.get('last_original_filename', None)
         source_file_key = session.get('last_source_file_key')
+        analysis_context = dict(session.get('order_attribution') or {})
+        analysis_context['input_type'] = session.get('last_input_type') or (
+            'upload' if original_filename else 'paste'
+        )
 
         # 建 processing 订单（改写结果由后台线程写回）
         conn = get_db()
@@ -106,7 +110,8 @@ def api_rewrite():
             price=price,
             mode=mode,
             paragraphs=paragraphs,
-            source_file_key=source_file_key
+            source_file_key=source_file_key,
+            analysis_context=analysis_context,
         )
 
         # 提交后台改写线程（复用支付后改写的 do_background_rewrite，含进度写入）

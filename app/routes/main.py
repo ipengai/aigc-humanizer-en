@@ -4,8 +4,39 @@ Main page routes — index, orders page, health check, SEO.
 
 from flask import Blueprint, render_template, session, jsonify, make_response, request
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 main_bp = Blueprint('main', __name__)
+
+
+def _capture_order_attribution():
+    """Keep privacy-safe acquisition dimensions for the next order in this session."""
+    current = dict(session.get('order_attribution') or {})
+    utm_source = (request.args.get('utm_source') or '').strip()[:100]
+    utm_medium = (request.args.get('utm_medium') or '').strip()[:100]
+    utm_campaign = (request.args.get('utm_campaign') or '').strip()[:150]
+
+    referrer_domain = None
+    if request.referrer:
+        try:
+            parsed = urlparse(request.referrer)
+            if parsed.hostname and parsed.hostname != request.host.split(':', 1)[0]:
+                referrer_domain = parsed.hostname.lower()[:150]
+        except ValueError:
+            referrer_domain = None
+
+    if utm_source:
+        current['utm_source'] = utm_source
+    if utm_medium:
+        current['utm_medium'] = utm_medium
+    if utm_campaign:
+        current['utm_campaign'] = utm_campaign
+    if referrer_domain:
+        current['referrer_domain'] = referrer_domain
+    current['traffic_source'] = (
+        current.get('utm_source') or current.get('referrer_domain') or 'direct'
+    )
+    session['order_attribution'] = current
 
 
 def _site_url():
@@ -56,6 +87,7 @@ def sitemap_xml():
 @main_bp.route('/')
 def index():
     """Landing page."""
+    _capture_order_attribution()
     return render_template('index.html')
 
 

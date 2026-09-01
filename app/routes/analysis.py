@@ -37,6 +37,7 @@ def api_analyze():
     original_format = 'txt'
     original_filename = None
     source_file_key = None
+    input_type = 'paste'
     from flask import current_app
     app = current_app
 
@@ -44,6 +45,7 @@ def api_analyze():
     if 'file' in request.files:
         file = request.files['file']
         if file and file.filename:
+            input_type = 'upload'
             if file.content_type and file.content_type not in ALLOWED_UPLOAD_MIMETYPES:
                 return jsonify({"error": "不支持的文件格式，仅支持 .docx、.pdf、.txt、.md"}), 400
 
@@ -88,6 +90,7 @@ def api_analyze():
     session['last_original_format'] = original_format
     session['last_original_filename'] = original_filename
     session['last_source_file_key'] = source_file_key
+    session['last_input_type'] = input_type
     session['last_text'] = text
     # 段落结构（含 style），供改写阶段判断标题/短段用；无样式信息时为 None
     session['last_paragraphs'] = paragraphs

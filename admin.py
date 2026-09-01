@@ -125,6 +125,7 @@ def api_orders():
     f_ps = (request.args.get('ps') or '').strip()
     f_status = (request.args.get('status') or '').strip()
     f_mode = (request.args.get('mode') or '').strip()
+    f_method = (request.args.get('method') or '').strip()
     f_backend = (request.args.get('backend') or '').strip()
 
     where = ["o.created_at >= ?", "o.created_at < ?"]
@@ -141,6 +142,13 @@ def api_orders():
         else:
             where.append("o.mode = ?")
             params.append(f_mode)
+    if f_method:
+        order_columns = {
+            row['name'] for row in conn.execute("PRAGMA table_info(orders)").fetchall()
+        }
+        if 'rewrite_method' in order_columns:
+            where.append("o.rewrite_method = ?")
+            params.append(f_method)
     if f_backend:
         where.append("o.detector_backend = ?")
         params.append(f_backend)
@@ -989,11 +997,18 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 <option value="expired">已过期</option>
                 <option value="awaiting_balance">余额待补足</option>
             </select>
-            <select id="f-mode" class="filter-select" onchange="applyFilter()">
+            <select id="f-method" class="filter-select" onchange="applyFilter()">
                 <option value="">改写方法：全部</option>
-                <option value="low">low</option>
-                <option value="median">median</option>
-                <option value="high">high</option>
+                <option value="api">API 改写</option>
+                <option value="llm">LLM 改写</option>
+                <option value="rule">规则改写</option>
+                <option value="hybrid">混合改写</option>
+            </select>
+            <select id="f-mode" class="filter-select" onchange="applyFilter()">
+                <option value="">改写强度：全部</option>
+                <option value="low">低（low）</option>
+                <option value="median">中（median）</option>
+                <option value="high">高（high）</option>
             </select>
             <select id="f-backend" class="filter-select" onchange="applyFilter()">
                 <option value="">检测方法：全部</option>
@@ -1059,6 +1074,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                         <th>任务状态</th>
                         <th>检测方法</th>
                         <th>改写方法</th>
+                        <th>改写强度</th>
                         <th>AI 率（原→改写）</th>
                         <th>创建时间</th>
                     </tr>
@@ -1385,14 +1401,28 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             failed: '处理失败', expired: '已过期', awaiting_balance: '余额待补足'
         };
         const MODE_LABEL = {
-            low: 'low', median: 'median', high: 'high', academic: 'median'
+            low: '低 (low)', median: '中 (median)',
+            high: '高 (high)', academic: '中 (median)'
+        };
+        const REWRITE_METHOD_LABEL = {
+            api: 'API 改写', llm: 'LLM 改写', rule: '规则改写',
+            hybrid: '混合改写'
         };
         const DETECTOR_LABEL = {
             sapling: 'Sapling', originality: 'Originality', rule_based: '本地规则',
             sapling_mock: 'Sapling(测试)', originality_mock: 'Originality(测试)'
         };
         function modeLabel(m) { return MODE_LABEL[m] || m || '未知'; }
+        function rewriteMethodLabel(method) {
+            return REWRITE_METHOD_LABEL[method] || method || '未知';
+        }
         function detectorLabel(d) { return DETECTOR_LABEL[d] || d || '未知'; }
+        function inputSourceLabel(order) {
+            const input = order.input_type === 'upload' ? '上传' :
+                (order.input_type === 'paste' ? '粘贴' : '未知');
+            const format = (order.original_format || 'txt').toUpperCase();
+            return order.input_type === 'upload' ? `${input} · ${format}` : input;
+        }
         function aiRateCell(o) {
             if (o.original_score == null && o.rewritten_score == null) return '-';
             const orig = o.original_score != null ? o.original_score + '%' : '-';
@@ -1452,7 +1482,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         }
 
         function clearFilter() {
-            ['f-payment', 'f-status', 'f-mode', 'f-backend'].forEach(id => {
+            ['f-payment', 'f-status', 'f-method', 'f-mode', 'f-backend'].forEach(id => {
                 document.getElementById(id).value = '';
             });
             currentPage = 1;
@@ -1486,6 +1516,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                     start: start, end: end, page: currentPage,
                     ps: document.getElementById('f-payment').value,
                     status: document.getElementById('f-status').value,
+                    method: document.getElementById('f-method').value,
                     mode: document.getElementById('f-mode').value,
                     backend: document.getElementById('f-backend').value
                 });
@@ -1540,24 +1571,40 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 html += `<tr class="row-order" onclick="toggleDetail('${escapeHtml(o.order_id)}')" id="row-${escapeHtml(o.order_id)}">
                     <td style="font-family:monospace;font-size:0.78rem;">${escapeHtml(o.order_id)}</td>
                     <td>${escapeHtml(o.user_email || '游客')}</td>
-                    <td style="font-family:monospace;font-size:0.75rem;color:#64748b;">${escapeHtml(o.original_format || 'txt')}</td>
+                    <td style="font-size:0.75rem;color:#64748b;">${escapeHtml(inputSourceLabel(o))}</td>
                     <td>${o.word_count || '-'}</td>
                     <td>${amountDisplay}</td>
                     <td><span class="badge ${STATUS_BADGE[ps] || 'badge-pending'}">${paymentMethod}</span></td>
                     <td><span class="badge ${STATUS_BADGE[ps] || 'badge-pending'}">${STATUS_LABEL[ps] || ps}</span></td>
                     <td><span class="badge ${ORDER_STATUS_BADGE[ss] || 'badge-pending'}">${ORDER_STATUS_LABEL[ss] || ss}</span></td>
                     <td>${detectorLabel(o.detector_backend)}</td>
-                    <td>${modeLabel(o.mode)}</td>
+                    <td>${escapeHtml(rewriteMethodLabel(o.rewrite_method))}</td>
+                    <td>${escapeHtml(modeLabel(o.mode))}</td>
                     <td>${aiRateCell(o)}</td>
                     <td style="font-size:0.78rem;color:#64748b;">${formatTime(o.created_at)}</td>
                 </tr>`;
                 html += `<tr class="row-detail" id="detail-${escapeHtml(o.order_id)}" style="display:none;">
-                    <td colspan="12">
+                    <td colspan="13">
                         <div class="detail-meta">
                             <span>文件: ${escapeHtml(o.original_filename || '-')}</span>
-                            <span>改写方法: ${modeLabel(o.mode)}</span>
+                            <span>改写方法: ${escapeHtml(rewriteMethodLabel(o.rewrite_method))}</span>
+                            <span>改写强度: ${escapeHtml(modeLabel(o.mode))}</span>
                             <span>检测方法: ${detectorLabel(o.detector_backend)}</span>
-                            <span>改写后端: ${escapeHtml(o.humanizer_backend || '-')}</span>
+                            <span>实际链路: ${escapeHtml(o.humanizer_backend || '-')}</span>
+                            <span>主引擎: ${escapeHtml(o.humanizer_primary || '-')}</span>
+                            <span>备用引擎: ${escapeHtml(o.humanizer_fallback || '-')}</span>
+                            <span>Provider / 模型: ${escapeHtml([o.rewrite_provider, o.rewrite_model].filter(Boolean).join(' / ') || '-')}</span>
+                            <span>触发备用: ${o.fallback_used ? `是（${o.fallback_block_count || 0} 块）` : '否'}</span>
+                            <span>改写块数: ${o.rewrite_block_count || '-'}</span>
+                            <span>管线版本: ${escapeHtml(o.rewrite_pipeline_version || '-')}</span>
+                            <span>输入方式: ${escapeHtml(inputSourceLabel(o))}</span>
+                            <span>流量来源: ${escapeHtml(o.traffic_source || '-')}</span>
+                            <span>UTM: ${escapeHtml([o.utm_source, o.utm_medium, o.utm_campaign].filter(Boolean).join(' / ') || '-')}</span>
+                            <span>来源域名: ${escapeHtml(o.referrer_domain || '-')}</span>
+                            <span>原始段落 / 标题 / 表格 / 参考文献: ${o.original_paragraph_count ?? '-'} / ${o.original_heading_count ?? '-'} / ${o.original_table_count ?? '-'} / ${o.original_reference_count ?? '-'}</span>
+                            <span>改写后段落 / 保护段落: ${o.rewritten_paragraph_count ?? '-'} / ${o.protected_paragraph_count ?? '-'}</span>
+                            <span>处理耗时: ${o.processing_duration_ms == null ? '-' : (o.processing_duration_ms / 1000).toFixed(1) + ' 秒'}</span>
+                            <span>失败阶段 / 类型: ${escapeHtml([o.failure_stage, o.failure_code].filter(Boolean).join(' / ') || '-')}</span>
                             <span>充值词数: ${o.recharge_words || '-'}</span>
                             <span>余额消耗: ${o.balance_words_used || '-'}</span>
                             <span>改写后词数: ${o.rewritten_word_count || '-'}</span>

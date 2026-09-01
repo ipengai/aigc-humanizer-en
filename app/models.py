@@ -154,13 +154,36 @@ class Order:
                 mode TEXT DEFAULT 'low',
                 detector_backend TEXT,
                 humanizer_backend TEXT,
+                rewrite_method TEXT,
+                rewrite_provider TEXT,
+                rewrite_model TEXT,
+                humanizer_primary TEXT,
+                humanizer_fallback TEXT,
+                fallback_used INTEGER DEFAULT 0,
+                fallback_block_count INTEGER DEFAULT 0,
+                rewrite_block_count INTEGER,
+                rewrite_pipeline_version TEXT,
                 original_score REAL,
                 rewritten_score REAL,
+                input_type TEXT,
+                traffic_source TEXT,
+                utm_source TEXT,
+                utm_medium TEXT,
+                utm_campaign TEXT,
+                referrer_domain TEXT,
+                original_paragraph_count INTEGER,
+                rewritten_paragraph_count INTEGER,
+                original_table_count INTEGER,
+                original_reference_count INTEGER,
+                protected_paragraph_count INTEGER,
                 rewritten_word_count INTEGER,
                 word_count_change_ratio REAL,
                 original_heading_count INTEGER,
                 rewritten_heading_count INTEGER,
                 heading_count_changed INTEGER DEFAULT 0,
+                processing_duration_ms INTEGER,
+                failure_stage TEXT,
+                failure_code TEXT,
                 completed_at TEXT,
                 status TEXT DEFAULT 'pending',
                 payment_status TEXT DEFAULT 'pending',
@@ -239,6 +262,34 @@ class Order:
             conn.execute("ALTER TABLE orders ADD COLUMN heading_count_changed INTEGER DEFAULT 0")
         if 'completed_at' not in columns:
             conn.execute("ALTER TABLE orders ADD COLUMN completed_at TEXT")
+        analysis_columns = {
+            'rewrite_method': 'TEXT',
+            'rewrite_provider': 'TEXT',
+            'rewrite_model': 'TEXT',
+            'humanizer_primary': 'TEXT',
+            'humanizer_fallback': 'TEXT',
+            'fallback_used': 'INTEGER DEFAULT 0',
+            'fallback_block_count': 'INTEGER DEFAULT 0',
+            'rewrite_block_count': 'INTEGER',
+            'rewrite_pipeline_version': 'TEXT',
+            'input_type': 'TEXT',
+            'traffic_source': 'TEXT',
+            'utm_source': 'TEXT',
+            'utm_medium': 'TEXT',
+            'utm_campaign': 'TEXT',
+            'referrer_domain': 'TEXT',
+            'original_paragraph_count': 'INTEGER',
+            'rewritten_paragraph_count': 'INTEGER',
+            'original_table_count': 'INTEGER',
+            'original_reference_count': 'INTEGER',
+            'protected_paragraph_count': 'INTEGER',
+            'processing_duration_ms': 'INTEGER',
+            'failure_stage': 'TEXT',
+            'failure_code': 'TEXT',
+        }
+        for name, column_type in analysis_columns.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE orders ADD COLUMN {name} {column_type}")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_alipay_trade_no "
             "ON orders(alipay_trade_no) WHERE alipay_trade_no IS NOT NULL"
@@ -246,6 +297,51 @@ class Order:
         conn.commit()
 
 
+
+    @classmethod
+    def _apply_input_analysis_context(cls, conn, order_id, paragraphs,
+                                      original_filename, analysis_context=None):
+        """Persist input, structure, and acquisition dimensions at order creation."""
+        analysis_context = analysis_context or {}
+        paragraph_items = [
+            item for item in (paragraphs or [])
+            if isinstance(item, dict) and item.get('text')
+        ]
+        original_paragraph_count = len(paragraph_items)
+        original_heading_count = sum(
+            1 for item in paragraph_items if item.get('is_heading')
+        )
+        original_reference_count = sum(
+            1 for item in paragraph_items if item.get('is_reference')
+        )
+        original_table_count = sum(
+            1 for item in (paragraphs or [])
+            if isinstance(item, dict) and 'table' in item
+        )
+        input_type = analysis_context.get('input_type') or (
+            'upload' if original_filename else 'paste'
+        )
+        conn.execute(
+            """UPDATE orders
+               SET input_type = ?, traffic_source = ?, utm_source = ?,
+                   utm_medium = ?, utm_campaign = ?, referrer_domain = ?,
+                   original_paragraph_count = ?, original_heading_count = ?,
+                   original_table_count = ?, original_reference_count = ?
+               WHERE order_id = ?""",
+            (
+                input_type,
+                analysis_context.get('traffic_source') or 'direct',
+                analysis_context.get('utm_source'),
+                analysis_context.get('utm_medium'),
+                analysis_context.get('utm_campaign'),
+                analysis_context.get('referrer_domain'),
+                original_paragraph_count,
+                original_heading_count,
+                original_table_count,
+                original_reference_count,
+                order_id,
+            )
+        )
 
     @classmethod
     def create_balance_order(cls, conn, user_id, order_id, original_text, rewritten_text,
@@ -282,7 +378,8 @@ class Order:
     @classmethod
     def create_processing_order(cls, conn, user_id, order_id, original_text,
                                 original_format, original_filename, word_count,
-                                price, mode, paragraphs=None, source_file_key=None):
+                                price, mode, paragraphs=None, source_file_key=None,
+                                analysis_context=None):
         """Create a balance-deducted order in 'processing' status (async rewrite).
 
         与 create_balance_order 的区别：直接改写现改为异步（后台线程改写），
@@ -304,6 +401,9 @@ class Order:
              original_format, original_filename, word_count, price, mode,
              word_count, User.get_balance(conn, user_id), source_file_key,
              'pending' if source_file_key else 'not_applicable', created_at, expires_at)
+        )
+        cls._apply_input_analysis_context(
+            conn, order_id, paragraphs, original_filename, analysis_context
         )
         conn.commit()
         return cls.get_by_order_id(conn, order_id)
@@ -355,6 +455,28 @@ class Order:
         conn.commit()
 
     @classmethod
+    def update_rewrite_plan(cls, conn, order_id, rewrite_metadata):
+        """Persist the planned rewrite route before execution can fail."""
+        rewrite_metadata = rewrite_metadata or {}
+        conn.execute(
+            """UPDATE orders
+               SET rewrite_method = ?, rewrite_provider = ?, rewrite_model = ?,
+                   humanizer_primary = ?, humanizer_fallback = ?,
+                   rewrite_pipeline_version = ?
+               WHERE order_id = ?""",
+            (
+                rewrite_metadata.get('rewrite_method'),
+                rewrite_metadata.get('rewrite_provider'),
+                rewrite_metadata.get('rewrite_model'),
+                rewrite_metadata.get('humanizer_primary'),
+                rewrite_metadata.get('humanizer_fallback'),
+                rewrite_metadata.get('rewrite_pipeline_version'),
+                order_id,
+            )
+        )
+        conn.commit()
+
+    @classmethod
     def get_progress(cls, conn, order_id):
         row = conn.execute(
             """SELECT progress_stage, progress_block, progress_total_blocks,
@@ -378,7 +500,8 @@ class Order:
     def create_payment_record(cls, conn, user_id, order_id, original_text,
                                original_format, original_filename, word_count,
                                price, mode, recharge_words, balance_words_used,
-                               paragraphs=None, source_file_key=None):
+                               paragraphs=None, source_file_key=None,
+                               analysis_context=None):
         """Create a pending auto-recharge order tied to a rewrite task.
 
         paragraphs: 可选的段落结构（list[dict]，含 style/is_heading/is_reference
@@ -401,6 +524,9 @@ class Order:
              word_count, price, mode, price, recharge_words, balance_words_used,
              source_file_key, 'pending' if source_file_key else 'not_applicable',
              created_at, expires_at)
+        )
+        cls._apply_input_analysis_context(
+            conn, order_id, paragraphs, original_filename, analysis_context
         )
         conn.commit()
         return cls.get_by_order_id(conn, order_id)
@@ -436,15 +562,17 @@ class Order:
     @classmethod
     def update_result(cls, conn, order_id, rewritten_text, rewritten_score, original_score=None,
                       rewritten_paragraphs=None, detector_backend=None,
-                      humanizer_backend=None):
+                      humanizer_backend=None, rewrite_metadata=None):
         """Update order with rewrite result (called after humanization completes)."""
         import json
+        rewrite_metadata = rewrite_metadata or {}
         paragraphs_json = json.dumps(
             rewritten_paragraphs, ensure_ascii=False
         ) if rewritten_paragraphs else None
 
         existing = conn.execute(
-            "SELECT word_count, paragraphs FROM orders WHERE order_id = ?",
+            """SELECT word_count, paragraphs, created_at, original_heading_count
+               FROM orders WHERE order_id = ?""",
             (order_id,)
         ).fetchone()
         original_word_count = int(existing['word_count'] or 0) if existing else 0
@@ -462,67 +590,101 @@ class Order:
             except (TypeError, ValueError):
                 original_paragraphs = []
         rewritten_items = rewritten_paragraphs if isinstance(rewritten_paragraphs, list) else []
-        original_heading_count = sum(
-            1 for item in original_paragraphs
-            if isinstance(item, dict) and item.get('is_heading')
+        stored_heading_count = existing['original_heading_count'] if existing else None
+        original_heading_count = (
+            stored_heading_count if stored_heading_count is not None else
+            sum(
+                1 for item in original_paragraphs
+                if isinstance(item, dict) and item.get('is_heading')
+            )
         )
         rewritten_heading_count = sum(
             1 for item in rewritten_items
             if isinstance(item, dict) and item.get('is_heading')
         )
-        heading_count_changed = int(original_heading_count != rewritten_heading_count)
-        completed_at = datetime.now(timezone.utc).isoformat()
-
-        common_values = (
-            rewritten_text, rewritten_score, paragraphs_json, detector_backend,
-            humanizer_backend, rewritten_word_count, word_count_change_ratio,
-            original_heading_count, rewritten_heading_count,
-            heading_count_changed, completed_at,
+        rewritten_paragraph_count = (
+            sum(
+                1 for item in rewritten_items
+                if isinstance(item, dict) and item.get('text')
+            )
+            if rewritten_items else
+            len([
+                value for value in (rewritten_text or '').split('\n\n')
+                if value.strip()
+            ])
         )
-        if original_score is not None:
-            conn.execute(
-                """UPDATE orders
-                   SET rewritten_text = ?,
-                       rewritten_score = ?,
-                       original_score = ?,
-                       rewritten_paragraphs = ?,
-                       detector_backend = ?,
-                       humanizer_backend = ?,
-                       rewritten_word_count = ?,
-                       word_count_change_ratio = ?,
-                       original_heading_count = ?,
-                       rewritten_heading_count = ?,
-                       heading_count_changed = ?,
-                       completed_at = ?,
-                       status = 'completed'
-                   WHERE order_id = ?""",
-                (rewritten_text, rewritten_score, original_score) + common_values[2:] + (order_id,)
+        protected_paragraph_count = sum(
+            1 for item in rewritten_items
+            if isinstance(item, dict) and item.get('was_rewritten') is False
+        )
+        heading_count_changed = int(original_heading_count != rewritten_heading_count)
+        completed_dt = datetime.now(timezone.utc)
+        completed_at = completed_dt.isoformat()
+        processing_duration_ms = None
+        if existing and existing['created_at']:
+            try:
+                created_dt = datetime.fromisoformat(existing['created_at'])
+                processing_duration_ms = max(
+                    0, round((completed_dt - created_dt).total_seconds() * 1000)
+                )
+            except (TypeError, ValueError):
+                processing_duration_ms = None
+
+        conn.execute(
+            """UPDATE orders
+               SET rewritten_text = ?, rewritten_score = ?,
+                   original_score = COALESCE(?, original_score),
+                   rewritten_paragraphs = ?, detector_backend = ?,
+                   humanizer_backend = ?, rewrite_method = ?,
+                   rewrite_provider = ?, rewrite_model = ?,
+                   humanizer_primary = ?, humanizer_fallback = ?,
+                   fallback_used = ?, fallback_block_count = ?,
+                   rewrite_block_count = ?, rewrite_pipeline_version = ?,
+                   rewritten_word_count = ?, word_count_change_ratio = ?,
+                   original_heading_count = ?, rewritten_heading_count = ?,
+                   heading_count_changed = ?, rewritten_paragraph_count = ?,
+                   protected_paragraph_count = ?, processing_duration_ms = ?,
+                   completed_at = ?, failure_stage = NULL, failure_code = NULL,
+                   status = 'completed'
+               WHERE order_id = ?""",
+            (
+                rewritten_text,
+                rewritten_score,
+                original_score,
+                paragraphs_json,
+                detector_backend,
+                rewrite_metadata.get('humanizer_backend') or humanizer_backend,
+                rewrite_metadata.get('rewrite_method'),
+                rewrite_metadata.get('rewrite_provider'),
+                rewrite_metadata.get('rewrite_model'),
+                rewrite_metadata.get('humanizer_primary'),
+                rewrite_metadata.get('humanizer_fallback'),
+                int(bool(rewrite_metadata.get('fallback_used'))),
+                int(rewrite_metadata.get('fallback_block_count') or 0),
+                rewrite_metadata.get('rewrite_block_count'),
+                rewrite_metadata.get('rewrite_pipeline_version'),
+                rewritten_word_count,
+                word_count_change_ratio,
+                original_heading_count,
+                rewritten_heading_count,
+                heading_count_changed,
+                rewritten_paragraph_count,
+                protected_paragraph_count,
+                processing_duration_ms,
+                completed_at,
+                order_id,
             )
-        else:
-            conn.execute(
-                """UPDATE orders
-                   SET rewritten_text = ?,
-                       rewritten_score = ?,
-                       rewritten_paragraphs = ?,
-                       detector_backend = ?,
-                       humanizer_backend = ?,
-                       rewritten_word_count = ?,
-                       word_count_change_ratio = ?,
-                       original_heading_count = ?,
-                       rewritten_heading_count = ?,
-                       heading_count_changed = ?,
-                       completed_at = ?,
-                       status = 'completed'
-                   WHERE order_id = ?""",
-                common_values + (order_id,)
-            )
+        )
         conn.commit()
+
     @classmethod
-    def mark_failed(cls, conn, order_id):
+    def mark_failed(cls, conn, order_id, failure_stage=None, failure_code=None):
         """Mark order as failed when background rewrite encounters an error."""
         conn.execute(
-            "UPDATE orders SET status = 'failed' WHERE order_id = ?",
-            (order_id,)
+            """UPDATE orders
+               SET status = 'failed', failure_stage = ?, failure_code = ?
+               WHERE order_id = ?""",
+            (failure_stage, failure_code, order_id)
         )
         conn.commit()
 

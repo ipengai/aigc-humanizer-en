@@ -57,6 +57,63 @@ _REWRITE_PROGRESS_TTL_SECONDS = 3600
 _DELIVERY_RETRY_LOCK = threading.Lock()
 _DELIVERY_RETRY_TIMERS = {}
 _DELIVERED_ORDERS = set()
+REWRITE_PIPELINE_VERSION = "2026-09-01-v1"
+
+
+def _describe_humanizer(adapter):
+    """Return stable analysis labels without exposing credentials or endpoints."""
+    class_name = type(adapter).__name__
+    backend = getattr(adapter, 'backend_label', None)
+    if not backend:
+        backend = {
+            'LLMBasedHumanizer': 'llm_based',
+            'RuleBasedHumanizer': 'rule_based',
+        }.get(class_name, class_name)
+
+    if backend.startswith('ai_text_humanizer'):
+        method = 'api'
+        provider = 'ai-text-humanizer.com'
+    elif backend == 'llm_based' or class_name == 'LLMBasedHumanizer':
+        method = 'llm'
+        provider = getattr(adapter, 'provider', None)
+    elif backend == 'rule_based' or class_name == 'RuleBasedHumanizer':
+        method = 'rule'
+        provider = 'local'
+    else:
+        method = 'unknown'
+        provider = None
+
+    return {
+        'backend': backend,
+        'method': method,
+        'provider': provider,
+        'model': getattr(adapter, 'model', None),
+    }
+
+
+def _humanizer_plan(adapter):
+    """Describe configured primary/fallback engines before execution."""
+    primary_adapter = getattr(adapter, 'primary', adapter)
+    fallback_adapter = getattr(adapter, 'fallback', None)
+    return {
+        'primary': _describe_humanizer(primary_adapter),
+        'fallback': _describe_humanizer(fallback_adapter) if fallback_adapter else None,
+    }
+
+
+def _planned_rewrite_metadata(adapter):
+    """Build the dimensions known before the first rewrite call."""
+    plan = _humanizer_plan(adapter)
+    primary = plan['primary']
+    fallback = plan['fallback']
+    return {
+        'rewrite_method': primary['method'],
+        'rewrite_provider': primary['provider'],
+        'rewrite_model': primary['model'],
+        'humanizer_primary': primary['backend'],
+        'humanizer_fallback': fallback['backend'] if fallback else None,
+        'rewrite_pipeline_version': REWRITE_PIPELINE_VERSION,
+    }
 
 
 def _prune_rewrite_progress(now=None):
@@ -216,8 +273,31 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
     if original_analysis is None and progress_cb:
         progress_cb(stage="detect", message="正在检测原文 AI 率")
 
+    plan = _humanizer_plan(humanizer_adapter)
+    execution_trace = {
+        'rewrite_block_count': 0,
+        'fallback_blocks': set(),
+        'whole_document_fallback': False,
+    }
+
+    def _traced_progress(stage, block=None, total_blocks=None, message=""):
+        if total_blocks:
+            execution_trace['rewrite_block_count'] = max(
+                execution_trace['rewrite_block_count'], int(total_blocks)
+            )
+        if '备用改写服务' in (message or ''):
+            if block is None:
+                execution_trace['whole_document_fallback'] = True
+            else:
+                execution_trace['fallback_blocks'].add(int(block))
+        if progress_cb:
+            progress_cb(
+                stage=stage, block=block, total_blocks=total_blocks,
+                message=message,
+            )
+
     humanized, rewritten_paragraphs = humanizer_adapter.humanize_structured(
-        text, mode=mode, paragraphs=paragraphs, progress_cb=progress_cb
+        text, mode=mode, paragraphs=paragraphs, progress_cb=_traced_progress
     )
     # 进度：改写后检测
     if progress_cb:
@@ -225,13 +305,51 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
     if original_analysis is None:
         original_analysis = analyze_text(text, stage="rewrite_detect_original")
     rewritten_analysis = analyze_text(humanized, stage="rewrite_detect_rewritten")
+    primary = plan['primary']
+    fallback = plan['fallback']
+    whole_fallback = execution_trace['whole_document_fallback']
+    fallback_block_count = len(execution_trace['fallback_blocks'])
+    fallback_used = bool(whole_fallback or fallback_block_count)
+    if whole_fallback and fallback:
+        effective = fallback
+        humanizer_backend = f"{primary['backend']}->{fallback['backend']}"
+    elif fallback_used and fallback:
+        effective = {
+            'method': (
+                primary['method'] if primary['method'] == fallback['method']
+                else 'hybrid'
+            ),
+            'provider': '+'.join(filter(None, [primary['provider'], fallback['provider']])),
+            'model': '+'.join(filter(None, [primary['model'], fallback['model']])),
+        }
+        humanizer_backend = f"{primary['backend']}->{fallback['backend']}"
+    else:
+        effective = primary
+        humanizer_backend = primary['backend']
+
+    rewrite_metadata = {
+        'humanizer_backend': humanizer_backend,
+        'rewrite_method': effective.get('method'),
+        'rewrite_provider': effective.get('provider') or None,
+        'rewrite_model': effective.get('model') or None,
+        'humanizer_primary': primary['backend'],
+        'humanizer_fallback': fallback['backend'] if fallback else None,
+        'fallback_used': fallback_used,
+        'fallback_block_count': (
+            fallback_block_count or (1 if whole_fallback else 0)
+        ),
+        'rewrite_block_count': execution_trace['rewrite_block_count'] or 1,
+        'rewrite_pipeline_version': REWRITE_PIPELINE_VERSION,
+    }
+
     return {
         "humanized": humanized,
         "rewritten_paragraphs": rewritten_paragraphs,
         "original_analysis": original_analysis,
         "rewritten_analysis": rewritten_analysis,
         "detector_backend": (original_analysis or {}).get('backend') or 'unknown',
-        "humanizer_backend": type(humanizer_adapter).__name__,
+        "humanizer_backend": humanizer_backend,
+        "rewrite_metadata": rewrite_metadata,
     }
 
 
@@ -248,6 +366,16 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
 
     try:
         from app.models import get_connection, Order
+        from app.extensions import humanizer_adapter
+
+        # 先记录计划链路；即使调用失败，后台也能按方法、服务商和版本归因。
+        conn = get_connection()
+        try:
+            Order.update_rewrite_plan(
+                conn, order_id, _planned_rewrite_metadata(humanizer_adapter)
+            )
+        finally:
+            conn.close()
 
         set_rewrite_progress(order_id, "detect", message="正在检测原文 AI 率")
         # 复用 /api/analyze 缓存的原文检测（文本一致即命中），避免后台重复检测原文
@@ -268,7 +396,8 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
                 original_analysis.get('ai_score', 0),
                 rewritten_paragraphs=rewritten_paragraphs,
                 detector_backend=result.get("detector_backend"),
-                humanizer_backend=result.get("humanizer_backend")
+                humanizer_backend=result.get("humanizer_backend"),
+                rewrite_metadata=result.get("rewrite_metadata"),
             )
         finally:
             conn.close()
@@ -283,7 +412,7 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
             from app.extensions import document_executor
             from app.helpers.docx_renderer import generate_order_docx
             document_executor.submit(generate_order_docx, order_id)
-    except Exception:
+    except Exception as exc:
         logging.exception(f"Background rewrite failed for {order_id}")
         set_rewrite_progress(order_id, "failed", message="改写失败")
         try:
@@ -308,7 +437,11 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
                             "UPDATE orders SET balance_after = ? WHERE order_id = ?",
                             (balance_after, order_id)
                         )
-                Order.mark_failed(conn, order_id)
+                Order.mark_failed(
+                    conn, order_id,
+                    failure_stage='rewrite',
+                    failure_code=type(exc).__name__,
+                )
             except Exception:
                 conn.rollback()
                 raise

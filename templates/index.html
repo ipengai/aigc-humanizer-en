@@ -24,7 +24,7 @@
 
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260901-1') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260901-2') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Baidu Tongji -->
@@ -386,7 +386,6 @@
                 <button class="btn btn-outline" id="download-btn" onclick="downloadResult()">⬇️ 下载</button>
                 <button class="btn btn-outline" id="latest-feedback-btn" onclick="openLatestFeedback()">💬 反馈本次结果</button>
             </div>
-            <p class="feedback-boundary">反馈用于异常复核和产品优化，不包含免费逐段人工改写。</p>
         </div>
     </section>
 
@@ -505,7 +504,7 @@
     <script src="{{ url_for('static', filename='common.js', v='20260824-1') }}"></script>
     <script src="{{ url_for('static', filename='auth.js') }}"></script>
     <script src="{{ url_for('static', filename='payment.js', v='20260831-2') }}"></script>
-    <script src="{{ url_for('static', filename='main.js', v='20260831-2') }}"></script>
+    <script src="{{ url_for('static', filename='main.js', v='20260901-2') }}"></script>
 <script>
 // Dynamic copyright year
 document.getElementById('copyright-year').textContent = new Date().getFullYear();

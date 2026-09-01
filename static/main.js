@@ -433,29 +433,16 @@ async function openFeedbackModal(orderId) {
                 <p class="feedback-intro">反馈用于定位产品问题和优化算法，不包含免费逐段人工改写。订单：${escapeHtml(orderId)}</p>
                 <form class="feedback-form" id="rewrite-feedback-form" onsubmit="submitRewriteFeedback(event, '${escapeHtml(orderId)}')">
                     <div class="feedback-options">
-                        <label class="feedback-option"><input type="radio" name="issue_type" value="satisfied">效果符合预期</label>
-                        <label class="feedback-option"><input type="radio" name="issue_type" value="high_ai_score">AI 率仍然较高</label>
-                        <label class="feedback-option"><input type="radio" name="issue_type" value="content_disorder">内容或结构错乱</label>
-                        <label class="feedback-option"><input type="radio" name="issue_type" value="meaning_changed">原意发生改变</label>
-                        <label class="feedback-option"><input type="radio" name="issue_type" value="details_lost">标题、数据或术语丢失</label>
-                        <label class="feedback-option"><input type="radio" name="issue_type" value="other">其他问题</label>
+                        <label class="feedback-option"><input type="checkbox" name="issue_types" value="satisfied">效果符合预期</label>
+                        <label class="feedback-option"><input type="checkbox" name="issue_types" value="high_ai_score">AI 率仍然较高</label>
+                        <label class="feedback-option"><input type="checkbox" name="issue_types" value="content_disorder">内容或结构错乱</label>
+                        <label class="feedback-option"><input type="checkbox" name="issue_types" value="meaning_changed">原意发生改变</label>
+                        <label class="feedback-option"><input type="checkbox" name="issue_types" value="details_lost">标题、数据或术语丢失</label>
+                        <label class="feedback-option"><input type="checkbox" name="issue_types" value="other">其他问题</label>
                     </div>
-                    <div class="feedback-row">
-                        <div class="feedback-field">
-                            <label for="feedback-detector">实际检测平台（选填）</label>
-                            <select class="auth-input" id="feedback-detector" name="detector_platform">
-                                <option value="">未检测 / 不填写</option>
-                                <option value="Turnitin">Turnitin</option>
-                                <option value="GPTZero">GPTZero</option>
-                                <option value="ZeroGPT">ZeroGPT</option>
-                                <option value="Originality.ai">Originality.ai</option>
-                                <option value="其他">其他平台</option>
-                            </select>
-                        </div>
-                        <div class="feedback-field">
-                            <label for="feedback-score">实际 AI 率（选填）</label>
-                            <input class="auth-input" id="feedback-score" name="external_score" type="number" min="0" max="100" step="0.1" placeholder="例如 36.5">
-                        </div>
+                    <div class="feedback-field">
+                        <label for="feedback-score">实际检测 AI 率（选填）</label>
+                        <input class="auth-input" id="feedback-score" name="external_score" type="number" min="0" max="100" step="0.1" placeholder="例如 36.5">
                     </div>
                     <div class="feedback-field">
                         <label for="feedback-comment">问题说明（选填）</label>
@@ -466,7 +453,7 @@ async function openFeedbackModal(orderId) {
                         <input class="auth-input" id="feedback-screenshot" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp">
                     </div>
                     <label class="feedback-contact">
-                        <input type="checkbox" id="feedback-contact-allowed">
+                        <input type="checkbox" id="feedback-contact-allowed" checked>
                         <span>如需进一步了解问题，同意 Huma 通过注册邮箱联系我。未勾选时只记录反馈，不主动联系。</span>
                     </label>
                     <div class="feedback-error" id="feedback-error"></div>
@@ -482,9 +469,11 @@ async function openFeedbackModal(orderId) {
     document.body.style.overflow = 'hidden';
 
     if (existing) {
-        const radio = overlay.querySelector(`input[name="issue_type"][value="${existing.issue_type}"]`);
-        if (radio) radio.checked = true;
-        overlay.querySelector('#feedback-detector').value = existing.detector_platform || '';
+        const issueTypes = existing.issue_types || (existing.issue_type ? [existing.issue_type] : []);
+        issueTypes.forEach(issueType => {
+            const checkbox = overlay.querySelector(`input[name="issue_types"][value="${issueType}"]`);
+            if (checkbox) checkbox.checked = true;
+        });
         overlay.querySelector('#feedback-score').value = existing.external_score ?? '';
         overlay.querySelector('#feedback-comment').value = existing.comment || '';
         overlay.querySelector('#feedback-contact-allowed').checked = Boolean(existing.contact_allowed);
@@ -505,10 +494,10 @@ async function submitRewriteFeedback(event, orderId) {
     const form = event.currentTarget;
     const errorEl = form.querySelector('#feedback-error');
     const submitBtn = form.querySelector('#feedback-submit');
-    const selected = form.querySelector('input[name="issue_type"]:checked');
+    const selected = form.querySelectorAll('input[name="issue_types"]:checked');
     errorEl.textContent = '';
-    if (!selected) {
-        errorEl.textContent = '请选择最符合本次结果的一项';
+    if (!selected.length) {
+        errorEl.textContent = '请至少选择一项反馈';
         return;
     }
 
@@ -519,7 +508,6 @@ async function submitRewriteFeedback(event, orderId) {
     }
 
     const payload = new FormData(form);
-    payload.set('issue_type', selected.value);
     payload.set(
         'contact_allowed',
         String(form.querySelector('#feedback-contact-allowed').checked)

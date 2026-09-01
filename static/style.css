@@ -1092,13 +1092,6 @@ body {
     gap: 12px;
     justify-content: center;
 }
-.feedback-boundary {
-    margin-top: 12px;
-    text-align: center;
-    color: var(--gray-500);
-    font-size: 0.8rem;
-}
-
 /* ========== REWRITE FEEDBACK ========== */
 .feedback-modal { max-width: 620px; }
 .feedback-form { text-align: left; }
@@ -1130,12 +1123,6 @@ body {
     background: #eef2ff;
 }
 .feedback-option input { accent-color: var(--primary); }
-.feedback-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 12px;
-}
 .feedback-field { margin-bottom: 12px; }
 .feedback-field label {
     display: block;
@@ -2104,7 +2091,7 @@ body {
     .hero-stats { gap: 20px; }
     .features-grid { grid-template-columns: 1fr; }
     .result-score-card { flex-direction: column; text-align: center; }
-    .feedback-options, .feedback-row { grid-template-columns: 1fr; }
+    .feedback-options { grid-template-columns: 1fr; }
     .sub-scores { grid-template-columns: repeat(2, 1fr); }
     .preview-comparison { grid-template-columns: 1fr; }
     .menu-toggle {

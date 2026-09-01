@@ -551,6 +551,7 @@ class RewriteFeedback:
                 user_id INTEGER NOT NULL,
                 order_id TEXT UNIQUE NOT NULL,
                 issue_type TEXT NOT NULL,
+                issue_types TEXT,
                 detector_platform TEXT,
                 external_score REAL,
                 comment TEXT,
@@ -567,20 +568,36 @@ class RewriteFeedback:
             "CREATE INDEX IF NOT EXISTS idx_rewrite_feedback_created_at "
             "ON rewrite_feedback(created_at)"
         )
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(rewrite_feedback)").fetchall()
+        }
+        if 'issue_types' not in columns:
+            conn.execute("ALTER TABLE rewrite_feedback ADD COLUMN issue_types TEXT")
         conn.commit()
 
     @classmethod
-    def upsert(cls, conn, user_id, order_id, issue_type,
+    def upsert(cls, conn, user_id, order_id, issue_types,
                detector_platform=None, external_score=None, comment=None,
                contact_allowed=False, screenshot_file_key=None):
+        import json
+
+        if isinstance(issue_types, str):
+            issue_types = [issue_types]
+        issue_types = list(dict.fromkeys(issue_types or []))
+        if not issue_types:
+            raise ValueError('At least one feedback issue type is required')
+        issue_type = issue_types[0]
+        issue_types_json = json.dumps(issue_types, ensure_ascii=False)
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """INSERT INTO rewrite_feedback
-               (user_id, order_id, issue_type, detector_platform, external_score,
-                comment, contact_allowed, screenshot_file_key, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               (user_id, order_id, issue_type, issue_types, detector_platform,
+                external_score, comment, contact_allowed, screenshot_file_key,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(order_id) DO UPDATE SET
                    issue_type = excluded.issue_type,
+                   issue_types = excluded.issue_types,
                    detector_platform = excluded.detector_platform,
                    external_score = excluded.external_score,
                    comment = excluded.comment,
@@ -590,8 +607,9 @@ class RewriteFeedback:
                        rewrite_feedback.screenshot_file_key
                    ),
                    updated_at = excluded.updated_at""",
-            (user_id, order_id, issue_type, detector_platform, external_score,
-             comment, int(bool(contact_allowed)), screenshot_file_key, now, now)
+            (user_id, order_id, issue_type, issue_types_json, detector_platform,
+             external_score, comment, int(bool(contact_allowed)),
+             screenshot_file_key, now, now)
         )
         conn.commit()
         return cls.get_by_order_id(conn, order_id)
@@ -602,6 +620,24 @@ class RewriteFeedback:
             "SELECT * FROM rewrite_feedback WHERE order_id = ?", (order_id,)
         ).fetchone()
         return dict(row) if row else None
+
+    @classmethod
+    def get_issue_types(cls, feedback):
+        """Return a normalized list for both legacy single-choice and new rows."""
+        import json
+
+        if not feedback:
+            return []
+        raw = feedback.get('issue_types')
+        if raw:
+            try:
+                values = json.loads(raw)
+                if isinstance(values, list):
+                    return [value for value in values if isinstance(value, str)]
+            except (TypeError, ValueError):
+                pass
+        legacy = feedback.get('issue_type')
+        return [legacy] if legacy else []
 
 class ActivationCode:
     """Activation/recharge code model for Xianyu channel."""

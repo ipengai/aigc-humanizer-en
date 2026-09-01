@@ -88,12 +88,12 @@ class RewriteFeedbackTests(unittest.TestCase):
         try:
             _create_completed_order(conn)
             RewriteFeedback.upsert(
-                conn, 1, 'HUMA-TEST-1', 'high_ai_score',
+                conn, 1, 'HUMA-TEST-1', ['high_ai_score', 'details_lost'],
                 detector_platform='Turnitin', external_score=46,
                 comment='Still high', contact_allowed=True,
             )
             RewriteFeedback.upsert(
-                conn, 1, 'HUMA-TEST-1', 'content_disorder',
+                conn, 1, 'HUMA-TEST-1', ['content_disorder', 'meaning_changed'],
                 detector_platform='Turnitin', external_score=42,
                 comment='The opening structure changed', contact_allowed=False,
             )
@@ -102,6 +102,10 @@ class RewriteFeedbackTests(unittest.TestCase):
             count = conn.execute('SELECT COUNT(*) FROM rewrite_feedback').fetchone()[0]
             self.assertEqual(count, 1)
             self.assertEqual(feedback['issue_type'], 'content_disorder')
+            self.assertEqual(
+                RewriteFeedback.get_issue_types(feedback),
+                ['content_disorder', 'meaning_changed'],
+            )
             self.assertEqual(feedback['external_score'], 42)
             self.assertEqual(feedback['contact_allowed'], 0)
         finally:
@@ -112,7 +116,7 @@ class RewriteFeedbackTests(unittest.TestCase):
         try:
             _create_completed_order(conn)
             RewriteFeedback.upsert(
-                conn, 1, 'HUMA-TEST-1', 'high_ai_score',
+                conn, 1, 'HUMA-TEST-1', ['high_ai_score', 'content_disorder'],
                 detector_platform='Turnitin', external_score=42,
                 comment='External result is still high', contact_allowed=True,
             )
@@ -139,6 +143,12 @@ class RewriteFeedbackTests(unittest.TestCase):
         self.assertEqual(data['external_score_count'], 1)
         self.assertEqual(data['external_below20_ratio'], 0)
         self.assertEqual(data['recent_feedback'][0]['issue_type'], 'high_ai_score')
+        self.assertEqual(
+            data['recent_feedback'][0]['issue_types'],
+            ['high_ai_score', 'content_disorder'],
+        )
+        self.assertEqual(data['feedback_issue_counts']['high_ai_score'], 1)
+        self.assertEqual(data['feedback_issue_counts']['content_disorder'], 1)
 
     def test_feedback_endpoint_saves_structured_report_and_private_screenshot(self):
         conn = _init_database(self.db_path)
@@ -168,8 +178,7 @@ class RewriteFeedbackTests(unittest.TestCase):
             response = client.post(
                 '/api/orders/HUMA-TEST-1/feedback',
                 data={
-                    'issue_type': 'content_disorder',
-                    'detector_platform': 'Turnitin',
+                    'issue_types': ['content_disorder', 'meaning_changed'],
                     'external_score': '42',
                     'comment': 'Opening paragraphs are disordered',
                     'contact_allowed': 'true',
@@ -180,6 +189,13 @@ class RewriteFeedbackTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.get_json()['success'])
+        with mock.patch('app.models.DB_PATH', str(self.db_path)):
+            detail_response = client.get('/api/orders/HUMA-TEST-1')
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(
+            detail_response.get_json()['feedback']['issue_types'],
+            ['content_disorder', 'meaning_changed'],
+        )
         saved_files = list(upload_dir.iterdir())
         self.assertEqual(len(saved_files), 1)
         self.assertEqual(saved_files[0].suffix, '.png')
@@ -189,6 +205,10 @@ class RewriteFeedbackTests(unittest.TestCase):
         try:
             feedback = RewriteFeedback.get_by_order_id(conn, 'HUMA-TEST-1')
             self.assertEqual(feedback['issue_type'], 'content_disorder')
+            self.assertEqual(
+                RewriteFeedback.get_issue_types(feedback),
+                ['content_disorder', 'meaning_changed'],
+            )
             self.assertEqual(feedback['external_score'], 42)
             self.assertEqual(feedback['contact_allowed'], 1)
             self.assertEqual(feedback['screenshot_file_key'], saved_files[0].name)

@@ -72,9 +72,10 @@ def api_order_detail(order_id):
     feedback = RewriteFeedback.get_by_order_id(conn, order_id)
     feedback_safe = None
     if feedback:
+        issue_types = RewriteFeedback.get_issue_types(feedback)
         feedback_safe = {
-            'issue_type': feedback['issue_type'],
-            'detector_platform': feedback['detector_platform'],
+            'issue_type': issue_types[0] if issue_types else None,
+            'issue_types': issue_types,
             'external_score': feedback['external_score'],
             'comment': feedback['comment'],
             'contact_allowed': bool(feedback['contact_allowed']),
@@ -145,15 +146,18 @@ def api_order_feedback(order_id):
     if order.get('status') != 'completed':
         return jsonify({'error': '改写完成后才能提交反馈'}), 400
 
-    issue_type = (request.form.get('issue_type') or '').strip()
-    detector_platform = (request.form.get('detector_platform') or '').strip()[:80]
+    issue_types = [value.strip() for value in request.form.getlist('issue_types')]
+    if not issue_types:
+        legacy_issue_type = (request.form.get('issue_type') or '').strip()
+        issue_types = [legacy_issue_type] if legacy_issue_type else []
+    issue_types = list(dict.fromkeys(value for value in issue_types if value))
     score_text = (request.form.get('external_score') or '').strip()
     comment = (request.form.get('comment') or '').strip()[:1000]
     contact_allowed = request.form.get('contact_allowed') == 'true'
 
-    if issue_type not in _FEEDBACK_ISSUE_TYPES:
-        return jsonify({'error': '请选择最符合本次结果的一项'}), 400
-    if issue_type == 'other' and not comment:
+    if not issue_types or any(value not in _FEEDBACK_ISSUE_TYPES for value in issue_types):
+        return jsonify({'error': '请至少选择一项有效反馈'}), 400
+    if 'other' in issue_types and not comment:
         return jsonify({'error': '选择“其他问题”时请补充说明'}), 400
 
     external_score = None
@@ -170,8 +174,7 @@ def api_order_feedback(order_id):
     try:
         new_file_key = _save_feedback_screenshot(request.files.get('screenshot'))
         RewriteFeedback.upsert(
-            conn, user_id, order_id, issue_type,
-            detector_platform=detector_platform or None,
+            conn, user_id, order_id, issue_types,
             external_score=external_score,
             comment=comment or None,
             contact_allowed=contact_allowed,

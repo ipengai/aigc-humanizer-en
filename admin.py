@@ -11,6 +11,7 @@ Authentication:
     Login via session cookie, auto-expires after 2 hours of inactivity.
 """
 
+import json
 import os
 import sqlite3
 import secrets
@@ -412,14 +413,26 @@ def api_rewrite_stats():
     external_scores = []
     recent_feedback = []
     for row in feedback_rows:
-        issue_counts[row['issue_type']] = issue_counts.get(row['issue_type'], 0) + 1
+        issue_types = []
+        raw_issue_types = row['issue_types'] if 'issue_types' in row.keys() else None
+        if raw_issue_types:
+            try:
+                parsed_issue_types = json.loads(raw_issue_types)
+                if isinstance(parsed_issue_types, list):
+                    issue_types = [value for value in parsed_issue_types if isinstance(value, str)]
+            except (TypeError, ValueError):
+                issue_types = []
+        if not issue_types and row['issue_type']:
+            issue_types = [row['issue_type']]
+        for issue_type in issue_types:
+            issue_counts[issue_type] = issue_counts.get(issue_type, 0) + 1
         if row['external_score'] is not None:
             external_scores.append(row['external_score'])
         recent_feedback.append({
             'order_id': row['order_id'],
             'user_email': row['user_email'],
-            'issue_type': row['issue_type'],
-            'detector_platform': row['detector_platform'],
+            'issue_type': issue_types[0] if issue_types else None,
+            'issue_types': issue_types,
             'external_score': row['external_score'],
             'comment': row['comment'],
             'contact_allowed': bool(row['contact_allowed']),
@@ -1210,7 +1223,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             <table>
                 <thead><tr>
                     <th>更新时间</th><th>订单</th><th>用户</th><th>反馈</th>
-                    <th>外部检测</th><th>说明</th><th>允许联系</th><th>截图</th>
+                    <th>实测 AI 率</th><th>说明</th><th>允许联系</th><th>截图</th>
                 </tr></thead>
                 <tbody id="stats-feedback-body"></tbody>
             </table>
@@ -1729,9 +1742,10 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         summaryEl.textContent = issueSummary || '暂无分类数据';
         const rows = data.recent_feedback || [];
         tbody.innerHTML = rows.map(item => {
-            const external = item.external_score == null
-                ? escapeHtml(item.detector_platform || '-')
-                : `${escapeHtml(item.detector_platform || '未填写平台')} ${item.external_score}%`;
+            const external = item.external_score == null ? '-' : `${item.external_score}%`;
+            const issueText = (item.issue_types || (item.issue_type ? [item.issue_type] : []))
+                .map(key => labels[key] || key)
+                .join('、');
             const screenshot = item.screenshot_url
                 ? `<a href="${escapeHtml(item.screenshot_url)}" target="_blank" rel="noopener">查看</a>`
                 : '-';
@@ -1739,7 +1753,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 <td>${formatTime(item.updated_at)}</td>
                 <td style="font-family:monospace;font-size:0.75rem;">${escapeHtml(item.order_id)}</td>
                 <td>${escapeHtml(item.user_email || '-')}</td>
-                <td>${escapeHtml(labels[item.issue_type] || item.issue_type)}</td>
+                <td>${escapeHtml(issueText || '-')}</td>
                 <td>${external}</td>
                 <td style="max-width:280px;white-space:normal;">${escapeHtml(item.comment || '-')}</td>
                 <td>${item.contact_allowed ? '是' : '否'}</td>

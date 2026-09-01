@@ -30,9 +30,25 @@ except ImportError:
     sys.path.insert(0, SCRIPT_DIR)
     from feishu_alert import send_alert
 
-DEFAULT_DB = os.environ.get("HUMANIZER_DB_PATH") or os.path.join(
-    "instance", "aigc_humanizer.db"
-)
+def _resolve_default_db():
+    """库路径：环境变量 HUMANIZER_DB_PATH 优先，回退到 config.DB_PATH，再回退相对路径。"""
+    env_db = os.environ.get("HUMANIZER_DB_PATH")
+    if env_db:
+        return env_db
+    try:
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        import config  # noqa: F401 - config.py 含真实路径，已被 gitignore
+        db_path = getattr(config, "DB_PATH", None)
+        if db_path:
+            return db_path
+    except Exception:
+        pass
+    return os.path.join("instance", "aigc_humanizer.db")
+
+
+DEFAULT_DB = _resolve_default_db()
 STATE_FILE = os.path.join(SCRIPT_DIR, ".fallback_alerted.json")
 
 

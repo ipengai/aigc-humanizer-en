@@ -63,3 +63,12 @@ ALIPAY_PUBLIC_KEY = ''
 ALIPAY_GATEWAY_URL = 'https://openapi.alipay.com/gateway.do'
 ALIPAY_NOTIFY_URL = ''
 ALIPAY_RETURN_URL = ''
+
+# ── 飞书告警（scripts/feishu_alert.py、scripts/check_fallback_orders.py 复用）──
+# 凭证也可通过环境变量 FEISHU_APP_ID / FEISHU_APP_SECRET / FEISHU_ALERT_OPEN_ID 覆盖。
+FEISHU_APP_ID = ''
+FEISHU_APP_SECRET = ''
+FEISHU_ALERT_OPEN_ID = ''
+
+# ── 数据库路径（scripts 巡检脚本读取，与 app.models.DB_PATH 指向同一文件）──
+DB_PATH = os.path.join(PROJ_ROOT, 'instance', 'aigc_humanizer.db')

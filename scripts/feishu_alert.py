@@ -89,10 +89,34 @@ def send_urgent(token, message_id, open_id, urgency):
     )
 
 
+def _load_feishu_config():
+    """飞书凭证读取：环境变量优先，回退到项目 config.py。
+
+    config.py 是项目唯一配置文件（已被 .gitignore 忽略），凭证统一写在里面。
+    脚本把项目根目录加入 sys.path 后 import config，因此 cron 直接运行即可，
+    无需手动注入环境变量。环境变量仍可作为临时覆盖（便于多部署/测试）。
+    """
+    app_id = (os.environ.get("FEISHU_APP_ID") or "").strip()
+    app_secret = (os.environ.get("FEISHU_APP_SECRET") or "").strip()
+    open_id = (os.environ.get("FEISHU_ALERT_OPEN_ID") or "").strip()
+    if app_id and app_secret and open_id:
+        return app_id, app_secret, open_id
+    try:
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _root not in sys.path:
+            sys.path.insert(0, _root)
+        import config  # noqa: F401 - config.py 含真实凭证，已被 gitignore
+        return (
+            (getattr(config, "FEISHU_APP_ID", "") or "").strip(),
+            (getattr(config, "FEISHU_APP_SECRET", "") or "").strip(),
+            (getattr(config, "FEISHU_ALERT_OPEN_ID", "") or "").strip(),
+        )
+    except Exception:
+        return "", "", ""
+
+
 def send_alert(message, urgency="none"):
-    app_id = os.environ.get("FEISHU_APP_ID", "").strip()
-    app_secret = os.environ.get("FEISHU_APP_SECRET", "").strip()
-    open_id = os.environ.get("FEISHU_ALERT_OPEN_ID", "").strip()
+    app_id, app_secret, open_id = _load_feishu_config()
     missing = [
         name for name, value in (
             ("FEISHU_APP_ID", app_id),
@@ -102,7 +126,8 @@ def send_alert(message, urgency="none"):
     ]
     if missing:
         raise FeishuAlertError(
-            "Missing required environment variables: " + ", ".join(missing)
+            "Missing Feishu credentials (checked env then config.py): "
+            + ", ".join(missing)
         )
 
     token = get_tenant_access_token(app_id, app_secret)

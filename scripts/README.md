@@ -30,7 +30,10 @@ python3 scripts/export_detector_comparisons.py --trust-legacy-sapling
 
 `feishu_alert.py` 使用企业自建应用机器人给指定人员发送单聊消息，并可追加应用内加急或电话加急。
 
-### 环境变量
+### 配置
+
+凭证统一写在项目 `config.py`（见 `config.example.py`）。也可通过环境变量临时
+覆盖（优先级高于 config.py）：
 
 ```bash
 export FEISHU_APP_ID='cli_xxx'
@@ -75,34 +78,31 @@ python3 scripts/check_fallback_orders.py --dry-run
 默认开启增量去重：已告警过的订单号记录在 `scripts/.fallback_alerted.json`，
 下次只报新增；`--no-dedup` 可关闭。配合 cron 每日巡检即可稳定盯住主服务健康度。
 
-### 配置落盘位置
+### 配置（统一在 config.py）
 
-四个变量（三个飞书凭证 + 一个库路径）由进程环境变量提供。cron 运行环境**不会**
-自动加载 shell profile，也不会读取项目的 `config.py`，因此必须显式注入，不能
-依赖 Web 应用的配置。推荐在阿里云 ECS 上放一个**项目之外的独立 env 文件**，权限
-收紧，例如：
+四个变量统一写在项目 `config.py`（与 `ALIPAY_*` / `LLM_*` 并列），部署时参照
+`config.example.py` 填入。该文件已被 `.gitignore` 忽略，凭证不会外泄。
 
-```bash
-sudo install -m 600 -o root -g root /dev/null /opt/aigc-humanizer/feishu.env
-sudo tee /opt/aigc-humanizer/feishu.env >/dev/null <<'EOF'
-FEISHU_APP_ID=cli_xxxxxxxx
-FEISHU_APP_SECRET=xxxxxxxxxxxxxxxx
-FEISHU_ALERT_OPEN_ID=ou_xxxxxxxx
-HUMANIZER_DB_PATH=/opt/aigc-humanizer-en/instance/aigc_humanizer.db
-EOF
+```python
+# config.py
+FEISHU_APP_ID = 'cli_xxx'
+FEISHU_APP_SECRET = 'xxx'
+FEISHU_ALERT_OPEN_ID = 'ou_xxx'
+DB_PATH = os.path.join(PROJ_ROOT, 'instance', 'aigc_humanizer.db')
 ```
 
-字段清单见仓库内 `scripts/.env.example`（无密钥、可提交）。**真实值切勿提交**——
-`.gitignore` 已忽略根目录与 `scripts/` 下的 `.env`。
+读取优先级：**环境变量 > config.py**。因此也可通过 `FEISHU_*` /
+`HUMANIZER_DB_PATH` 环境变量临时覆盖（便于多部署或测试），无需改动 config.py。
+脚本会把项目根目录加入 `sys.path` 后 `import config`，所以 cron **直接运行即可，
+无需手动注入环境变量**。
 
 ### cron 部署
 
 脚本仅依赖 Python 标准库，直接用系统的 `python3` 即可，无需激活 venv。
-环境变量从上面那个外部文件注入，命令末尾重定向日志：
 
 ```cron
 # 每天 08:00 巡检前一日兜底订单
-0 8 * * * set -a; . /opt/aigc-humanizer/feishu.env; /usr/bin/python3 /opt/aigc-humanizer-en/scripts/check_fallback_orders.py --since-hours 24 >> /var/log/huma_fallback.log 2>&1
+0 8 * * * cd /opt/aigc-humanizer-en && /usr/bin/python3 scripts/check_fallback_orders.py --since-hours 24 >> /var/log/huma_fallback.log 2>&1
 ```
 
 - 默认增量去重，每天只报新增兜底订单，不会刷屏。

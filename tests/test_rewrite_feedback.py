@@ -182,12 +182,12 @@ class RewriteFeedbackTests(unittest.TestCase):
             _create_completed_order(conn)
             RewriteFeedback.upsert(
                 conn, 1, 'HUMA-TEST-1', ['high_ai_score', 'details_lost'],
-                detector_platform='Turnitin', external_score=46,
+                external_score=46,
                 comment='Still high', contact_allowed=True,
             )
             RewriteFeedback.upsert(
                 conn, 1, 'HUMA-TEST-1', ['content_disorder', 'meaning_changed'],
-                detector_platform='Turnitin', external_score=42,
+                external_score=42,
                 comment='The opening structure changed', contact_allowed=False,
             )
 
@@ -248,7 +248,7 @@ class RewriteFeedbackTests(unittest.TestCase):
             _create_completed_order(conn)
             RewriteFeedback.upsert(
                 conn, 1, 'HUMA-TEST-1', ['high_ai_score', 'content_disorder'],
-                detector_platform='Turnitin', external_score=42,
+                external_score=42,
                 comment='External result is still high', contact_allowed=True,
             )
         finally:

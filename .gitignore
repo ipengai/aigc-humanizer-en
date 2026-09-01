@@ -42,3 +42,6 @@ logs/
 # macOS 与本地迁移备份
 .DS_Store
 bakup/
+
+# 兜底巡检脚本的已告警订单状态（运行期生成）
+scripts/.fallback_alerted.json

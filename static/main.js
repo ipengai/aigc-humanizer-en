@@ -453,7 +453,7 @@ async function openFeedbackModal(orderId) {
                         <input class="auth-input" id="feedback-screenshot" name="screenshot" type="file" accept="image/png,image/jpeg,image/webp">
                     </div>
                     <label class="feedback-contact">
-                        <input type="checkbox" id="feedback-contact-allowed" checked>
+                        <input type="checkbox" id="feedback-contact-allowed">
                         <span>如需进一步了解问题，同意 Huma 通过注册邮箱联系我。未勾选时只记录反馈，不主动联系。</span>
                     </label>
                     <div class="feedback-error" id="feedback-error"></div>

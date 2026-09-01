@@ -53,6 +53,28 @@ python3 scripts/feishu_alert.py '[Huma] 主备改写服务全部失败' --urgent
 
 应用需要启用机器人能力并发布版本，告警接收人必须位于应用可用范围内。应用还需要申请“以应用身份发送消息”以及对应的“发送应用内加急”或“发送电话加急”权限。电话加急会消耗企业额度。
 
+## 改写兜底巡检
+
+`check_fallback_orders.py` 只读扫描 `orders` 表，找出实际改写链路走了兜底的订单
+（`humanizer_backend` 形如 `primary->fallback`，或 `fallback_used=1`），通过
+`feishu_alert` 发送飞书告警。正常线上主服务异常时会触发主备切换，持续出现兜底
+订单即代表主服务可能出问题，需要人工排查。
+
+```bash
+# 依赖上文的飞书环境变量，扫描最近 24 小时
+export HUMANIZER_DB_PATH=/path/to/instance/aigc_humanizer.db
+python3 scripts/check_fallback_orders.py --since-hours 24
+
+# 全量扫描、每次都告警（不增量去重）
+python3 scripts/check_fallback_orders.py --all --no-dedup
+
+# 只打印告警内容、不真正发送
+python3 scripts/check_fallback_orders.py --dry-run
+```
+
+默认开启增量去重：已告警过的订单号记录在 `scripts/.fallback_alerted.json`，
+下次只报新增；`--no-dedup` 可关闭。配合 cron 每日巡检即可稳定盯住主服务健康度。
+
 ## 文档文件清理
 
 `cleanup_document_files.sh` 默认删除 `instance/source_docs/` 和 `instance/output_docs/` 中超过 7 天的文件。通过 `RETENTION_DAYS` 调整保留天数。

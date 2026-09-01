@@ -707,6 +707,9 @@ class RewriteFeedback:
 
     @classmethod
     def init_table(cls, conn):
+        # 注：detector_platform 已于 2026-09-01 废弃（前端不再采集检测平台）。
+        # 存量库的该列保留不删——SELECT * 多返回一个字段，而所有反馈接口都按
+        # 白名单输出，无影响；DROP COLUMN 需 SQLite 3.35+ 且不可逆，不划算。
         conn.execute("""
             CREATE TABLE IF NOT EXISTS rewrite_feedback (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -714,7 +717,6 @@ class RewriteFeedback:
                 order_id TEXT UNIQUE NOT NULL,
                 issue_type TEXT NOT NULL,
                 issue_types TEXT,
-                detector_platform TEXT,
                 external_score REAL,
                 comment TEXT,
                 contact_allowed INTEGER DEFAULT 0,
@@ -739,7 +741,7 @@ class RewriteFeedback:
 
     @classmethod
     def upsert(cls, conn, user_id, order_id, issue_types,
-               detector_platform=None, external_score=None, comment=None,
+               external_score=None, comment=None,
                contact_allowed=False, screenshot_file_key=None):
         import json
 
@@ -753,14 +755,13 @@ class RewriteFeedback:
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             """INSERT INTO rewrite_feedback
-               (user_id, order_id, issue_type, issue_types, detector_platform,
+               (user_id, order_id, issue_type, issue_types,
                 external_score, comment, contact_allowed, screenshot_file_key,
                 created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(order_id) DO UPDATE SET
                    issue_type = excluded.issue_type,
                    issue_types = excluded.issue_types,
-                   detector_platform = excluded.detector_platform,
                    external_score = excluded.external_score,
                    comment = excluded.comment,
                    contact_allowed = excluded.contact_allowed,
@@ -769,7 +770,7 @@ class RewriteFeedback:
                        rewrite_feedback.screenshot_file_key
                    ),
                    updated_at = excluded.updated_at""",
-            (user_id, order_id, issue_type, issue_types_json, detector_platform,
+            (user_id, order_id, issue_type, issue_types_json,
              external_score, comment, int(bool(contact_allowed)),
              screenshot_file_key, now, now)
         )

@@ -25,6 +25,8 @@ uploads/
 
 # 配置（含密钥）
 config.py
+.env
+scripts/.env
 
 # 工作记忆 / 调试
 .workbuddy/

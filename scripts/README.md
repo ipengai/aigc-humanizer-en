@@ -75,6 +75,40 @@ python3 scripts/check_fallback_orders.py --dry-run
 默认开启增量去重：已告警过的订单号记录在 `scripts/.fallback_alerted.json`，
 下次只报新增；`--no-dedup` 可关闭。配合 cron 每日巡检即可稳定盯住主服务健康度。
 
+### 配置落盘位置
+
+四个变量（三个飞书凭证 + 一个库路径）由进程环境变量提供。cron 运行环境**不会**
+自动加载 shell profile，也不会读取项目的 `config.py`，因此必须显式注入，不能
+依赖 Web 应用的配置。推荐在阿里云 ECS 上放一个**项目之外的独立 env 文件**，权限
+收紧，例如：
+
+```bash
+sudo install -m 600 -o root -g root /dev/null /opt/aigc-humanizer/feishu.env
+sudo tee /opt/aigc-humanizer/feishu.env >/dev/null <<'EOF'
+FEISHU_APP_ID=cli_xxxxxxxx
+FEISHU_APP_SECRET=xxxxxxxxxxxxxxxx
+FEISHU_ALERT_OPEN_ID=ou_xxxxxxxx
+HUMANIZER_DB_PATH=/opt/aigc-humanizer-en/instance/aigc_humanizer.db
+EOF
+```
+
+字段清单见仓库内 `scripts/.env.example`（无密钥、可提交）。**真实值切勿提交**——
+`.gitignore` 已忽略根目录与 `scripts/` 下的 `.env`。
+
+### cron 部署
+
+脚本仅依赖 Python 标准库，直接用系统的 `python3` 即可，无需激活 venv。
+环境变量从上面那个外部文件注入，命令末尾重定向日志：
+
+```cron
+# 每天 08:00 巡检前一日兜底订单
+0 8 * * * set -a; . /opt/aigc-humanizer/feishu.env; /usr/bin/python3 /opt/aigc-humanizer-en/scripts/check_fallback_orders.py --since-hours 24 >> /var/log/huma_fallback.log 2>&1
+```
+
+- 默认增量去重，每天只报新增兜底订单，不会刷屏。
+- 想更高频盯主服务健康度，可加一条每 6 小时巡检：`0 */6 * * * ...`。
+- 需要电话/应用内加急时命令末尾加 `--urgent phone`（电话加急消耗企业额度）。
+
 ## 文档文件清理
 
 `cleanup_document_files.sh` 默认删除 `instance/source_docs/` 和 `instance/output_docs/` 中超过 7 天的文件。通过 `RETENTION_DAYS` 调整保留天数。

@@ -290,10 +290,6 @@ body {
 .hero-expectation {
     display: inline-flex;
     align-items: center;
-    padding: 9px 13px;
-    border: 1px solid #fdba74;
-    border-radius: var(--radius-sm);
-    background: #fff7ed;
     color: #c2410c;
     font-size: 0.84rem;
     font-weight: 600;

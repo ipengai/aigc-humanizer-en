@@ -63,6 +63,12 @@
       color: var(--muted);
       text-align: left;
     }
+    .code-hint {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--accent);
+      font-weight: 600;
+    }
     .note { color: var(--muted); font-size: 12px; margin-top: 16px; line-height: 1.6; }
     .spinner {
       display: inline-block; width: 14px; height: 14px; margin-right: 6px;
@@ -82,8 +88,11 @@
         <div class="sub">{{ product_name }}<br>点击下方按钮获取资料包</div>
         <div class="divider"></div>
         {% if delivery_link %}
-          <a class="dl-btn" href="{{ delivery_link }}" target="_blank" rel="noopener">↓ 获取资料包下载链接</a>
-          <div class="link-box">{{ delivery_link }}</div>
+          {% set dl_url = delivery_link.split(' 提取码: ')[0].strip() %}
+          {% set dl_code = delivery_link.split(' 提取码: ')[1].strip() if ' 提取码: ' in delivery_link else '' %}
+          <a class="dl-btn" href="{{ dl_url }}" target="_blank" rel="noopener">↓ 获取资料包下载链接</a>
+          <div class="link-box">{{ dl_url }}</div>
+          {% if dl_code %}<div class="code-hint">提取码：{{ dl_code }}</div>{% endif %}
         {% else %}
           <div class="sub" style="color:var(--accent);font-weight:600;">
             交付链接待配置，请凭订单号联系客服补发

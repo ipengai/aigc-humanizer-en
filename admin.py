@@ -957,7 +957,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <div class="tabs">
-        <button class="tab-btn active" onclick="switchTab('orders')" id="tab-orders">📋 订单</button>
+        <button class="tab-btn active" onclick="switchTab('orders')" id="tab-orders">📋 huma订单</button>
         <button class="tab-btn" onclick="switchTab('agentteam')" id="tab-agentteam">🛒 AgentTeam</button>
                 <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats">📊 改写效果</button>
         <button class="tab-btn" onclick="switchTab('activation')" id="tab-activation">🎯 兑换码</button>
@@ -1574,7 +1574,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
             try {
                 const qs = new URLSearchParams({
-                    start: start, end: end, page: currentPage,
+                    start: start, end: end, page: currentPage, type: 'recharge',
                     ps: document.getElementById('f-payment').value,
                     status: document.getElementById('f-status').value,
                     method: document.getElementById('f-method').value,

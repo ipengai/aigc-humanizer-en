@@ -23,7 +23,7 @@ PRODUCTS = {
         "name": "一人公司 AI Agent 团队搭建模板包",
         "price": 49.00,
         "description": "AgentTeam 模板包 · 一次购买 · 永久下载",
-        "delivery": "https://pan.baidu.com/s/1oNe35ElWsLmrdz_TA4d6SQ?pwd=zce9 提取码: zce9",
+        "delivery": "https://pan.baidu.com/s/1oNe35ElWsLmrdz_TA4d6SQ?pwd=zce9",
     },
 }
 

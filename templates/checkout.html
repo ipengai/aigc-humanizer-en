@@ -70,10 +70,11 @@
       <div class="divider"></div>
       <div class="qr-label">请使用「支付宝」扫一扫完成支付</div>
       <div class="qr-box" id="qrBox">
-        {% if form_html %}
-          {{ form_html | safe }}
-        {% elif qr_code %}
+        {% if qr_code %}
           <img src="{{ qr_code }}" alt="支付宝二维码">
+        {% elif form_html %}
+          <iframe id="qrFrame" width="200" height="200" frameborder="0"
+                  scrolling="no" style="border:none;overflow:hidden;"></iframe>
         {% else %}
           <span style="color:var(--muted)">二维码生成中…</span>
         {% endif %}
@@ -83,6 +84,25 @@
     </div>
     <div class="foot">虚拟资料 · 支付成功后不支持无理由退款 · 下载异常可联系补发</div>
   </div>
+
+  <script>
+    // 将支付宝 form_html 写入 iframe 内部文档，隔离其自动提交脚本，
+    // 避免脚本在当前页面执行导致整页跳转到支付宝二维码页（全屏弹窗）。
+    {% if form_html %}
+    (function () {
+      var html = {{ form_html | tojson }};
+      var frame = document.getElementById('qrFrame');
+      if (frame) {
+        var doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+        if (doc) {
+          doc.open();
+          doc.write(html);
+          doc.close();
+        }
+      }
+    })();
+    {% endif %}
+  </script>
 
   <script>
     (function () {

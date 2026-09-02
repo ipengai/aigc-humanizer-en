@@ -115,8 +115,9 @@ def api_orders():
     if start_dt > end_dt:
         return jsonify({'error': '开始日期不能晚于结束日期'}), 400
 
-    start_iso = datetime.combine(start_dt, datetime.min.time()).isoformat()
-    end_iso = datetime.combine(end_dt + timedelta(days=1), datetime.min.time()).isoformat()
+    # created_at 存的是 UTC，后台按北京时间查询：北京日界线 = UTC-8h
+    start_iso = (datetime.combine(start_dt, datetime.min.time()) - timedelta(hours=8)).isoformat()
+    end_iso = (datetime.combine(end_dt + timedelta(days=1), datetime.min.time()) - timedelta(hours=8)).isoformat()
 
     conn = get_db()
     per_page = 50
@@ -271,18 +272,19 @@ def api_trends():
     if (end_dt - start_dt).days > 366:
         return jsonify({'error': '时间范围不能超过一年'}), 400
 
-    start_iso = datetime.combine(start_dt, datetime.min.time()).isoformat()
-    end_iso = datetime.combine(end_dt + timedelta(days=1), datetime.min.time()).isoformat()
+    # created_at 存的是 UTC，后台按北京时间查询：北京日界线 = UTC-8h
+    start_iso = (datetime.combine(start_dt, datetime.min.time()) - timedelta(hours=8)).isoformat()
+    end_iso = (datetime.combine(end_dt + timedelta(days=1), datetime.min.time()) - timedelta(hours=8)).isoformat()
 
     conn = get_db()
     try:
         user_rows = conn.execute(
-            "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS cnt FROM users "
+            "SELECT substr(datetime(substr(created_at, 1, 19), '+8 hours'), 1, 10) AS day, COUNT(*) AS cnt FROM users "
             "WHERE created_at >= ? AND created_at < ? GROUP BY day",
             (start_iso, end_iso)
         ).fetchall()
         order_rows = conn.execute(
-            "SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS cnt, "
+            "SELECT substr(datetime(substr(created_at, 1, 19), '+8 hours'), 1, 10) AS day, COUNT(*) AS cnt, "
             "SUM(CASE WHEN payment_status = 'paid' THEN 1 ELSE 0 END) AS paid_cnt, "
             "COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN price ELSE 0 END), 0) AS revenue "
             "FROM orders WHERE created_at >= ? AND created_at < ? GROUP BY day",
@@ -346,8 +348,9 @@ def api_rewrite_stats():
     if start_dt > end_dt:
         return jsonify({'error': '开始日期不能晚于结束日期'}), 400
 
-    start_iso = datetime.combine(start_dt, datetime.min.time()).isoformat()
-    end_iso = datetime.combine(end_dt + timedelta(days=1), datetime.min.time()).isoformat()
+    # created_at 存的是 UTC，后台按北京时间查询：北京日界线 = UTC-8h
+    start_iso = (datetime.combine(start_dt, datetime.min.time()) - timedelta(hours=8)).isoformat()
+    end_iso = (datetime.combine(end_dt + timedelta(days=1), datetime.min.time()) - timedelta(hours=8)).isoformat()
 
     conn = get_db()
     try:
@@ -1734,7 +1737,11 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             if (!isoStr) return '-';
             try {
                 const d = new Date(isoStr);
-                return d.toLocaleString('zh-CN', {
+                if (isNaN(d.getTime())) return isoStr;
+                // 存储为 UTC，统一按北京时间（+8）显示，固定 timeZone:UTC 渲染避免受浏览器时区影响
+                const bj = new Date(d.getTime() + 8 * 3600 * 1000);
+                return bj.toLocaleString('zh-CN', {
+                    timeZone: 'UTC',
                     month: '2-digit', day: '2-digit',
                     hour: '2-digit', minute: '2-digit', second: '2-digit'
                 });

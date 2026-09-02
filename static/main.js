@@ -8,7 +8,11 @@
 /* ========== FILE UPLOAD ========== */
 /* Click to upload (only on main page) */
 if (dropZone && fileInput) {
-    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('click', (e) => {
+        // 不拦截上传区内的链接（如"使用帮助"），避免点击链接误触发文件选择弹窗
+        if (e.target.closest('a')) return;
+        fileInput.click();
+    });
     fileInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (file) handleFileSelect(file);

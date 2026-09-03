@@ -373,6 +373,14 @@ class HumanizerAdapter(ABC):
                 if source_paragraphs:
                     item["source_format"] = source_paragraphs[0].get("source_format")
                 structured.append(item)
+            elif task["type"] == "layout":
+                # Non-text PDF/DOCX structure must survive the rewrite round
+                # trip in its original position. It contributes no detector or
+                # humanizer text, but the download renderer needs its metadata.
+                for source_node in task.get("paragraphs") or []:
+                    item = dict(source_node)
+                    item["was_rewritten"] = False
+                    structured.append(item)
             else:
                 # protected：原样保留
                 text = task.get("text") or ""
@@ -385,18 +393,20 @@ class HumanizerAdapter(ABC):
                     if not ptext:
                         continue
                     style = p.get("style")
-                    level = _heading_level_from_style(style)
-                    item = {
+                    level = p.get("heading_level")
+                    if level is None:
+                        level = _heading_level_from_style(style)
+                    # Preserve PDF geometry/font/reference/caption metadata so
+                    # the reconstructed DOCX can render protected content with
+                    # more than just its plain text.
+                    item = dict(p)
+                    item.update({
                         "text": ptext,
                         "was_rewritten": False,
                         "is_heading": bool(level is not None or p.get("is_heading", False)),
                         "heading_level": level,
                         "style": style,
-                    }
-                    for key in ("node_id", "content_index", "paragraph_index",
-                                "source_format", "body_index"):
-                        if key in p:
-                            item[key] = p[key]
+                    })
                     structured.append(item)
 
         logger.info(

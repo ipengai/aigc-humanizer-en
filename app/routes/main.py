@@ -87,8 +87,12 @@ def sitemap_xml():
 @main_bp.route('/')
 def index():
     """Landing page."""
+    from config import PRICE_PER_1000_WORDS
     _capture_order_attribution()
-    return render_template('index.html')
+    return render_template(
+        'index.html',
+        price_per_1000_words=PRICE_PER_1000_WORDS,
+    )
 
 
 @main_bp.route('/faq')

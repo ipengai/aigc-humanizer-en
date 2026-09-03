@@ -22,6 +22,16 @@ DEFAULT_MAX_WORDS = 2000      # 单次请求最大字数（聚合超过即切新
 DEFAULT_MIN_CHARS = 300       # 单次请求最小字符数；不足时继续吸收正文段
 
 
+def _is_layout_node(para):
+    """Tables/images stay in document flow but never enter rewrite text."""
+    return bool(
+        para and (
+            para.get("node_type") in ("table", "image") or
+            "table" in para or "image" in para
+        ) and not para.get("text")
+    )
+
+
 def _looks_like_title(text, words):
     """启发式判断一个 Normal 段是否像标题（无样式时的兜底）。"""
     if words > 15:
@@ -75,10 +85,8 @@ class _StructureGuard:
     def should_protect(self, para):
         if not para:
             return True
-        # Tables are layout-only nodes at this stage. They are neither sent to
-        # rewriting nor treated as boundaries between surrounding paragraphs.
-        if "table" in para:
-            return False
+        if _is_layout_node(para):
+            return True
         text = (para.get("text") or "").strip()
         if not text:
             return True
@@ -86,7 +94,8 @@ class _StructureGuard:
         # 结构化内容由 extract_text 预先标记，统一跳过改写。
         protected_flags = (
             "is_reference", "is_code_block", "has_image",
-            "has_hyperlink", "is_heading",
+            "has_hyperlink", "is_heading", "is_toc",
+            "is_front_matter", "is_caption",
         )
         if any(para.get(flag) for flag in protected_flags):
             return True
@@ -163,7 +172,8 @@ def segment(paragraphs, mode="low", min_words=10,
     if mode == "paragraph":
         mode = "low"
     has_heading_info = any(
-        para.get("is_heading", False) for para in paragraphs if "table" not in para
+        para.get("is_heading", False) for para in paragraphs
+        if not _is_layout_node(para)
     )
     guard = _StructureGuard(
         min_words=min_words,
@@ -210,8 +220,8 @@ def _finalize_tasks(tasks):
 def _segment_paragraph(paragraphs, guard):
     tasks = []
     for para in paragraphs:
-        if "table" in para:
-            continue
+        if _is_layout_node(para):
+            tasks.append({"type": "layout", "text": "", "paragraphs": [para]})
         elif guard.should_protect(para):
             tasks.append({"type": "protected", "text": para["text"],
                           "paragraphs": [para]})
@@ -271,8 +281,9 @@ def _segment_aggregate(paragraphs, guard, max_paras, max_words, min_chars):
             buffer_chars = 0
 
     for para in paragraphs:
-        if "table" in para:
-            continue
+        if _is_layout_node(para):
+            flush()
+            tasks.append({"type": "layout", "text": "", "paragraphs": [para]})
         elif guard.should_protect(para):
             # 标题 / 参考文献，以及按配置启用的短段保护，是硬边界。
             flush()

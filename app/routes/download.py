@@ -146,7 +146,9 @@ def api_download(order_id):
                     len(rewritten_text.split()) if rewritten_text else 0,
                     bool(rewritten_paragraphs))
         return generate_file_response(
-            rewritten_text, req_format, filename, paragraphs=rewritten_paragraphs
+            rewritten_text, req_format, filename,
+            paragraphs=rewritten_paragraphs,
+            source_path=source_path if has_source_copy else None,
         )
     except Exception:
         logger.exception("Failed to generate download file for order %s (format=%s)", order_id, req_format)

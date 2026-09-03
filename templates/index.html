@@ -336,6 +336,49 @@
         </div>
     </div>
 
+    <!-- ============ FREE PREVIEW (前200词) ============ -->
+    <section class="section preview-section" id="preview-section" style="display:none;">
+        <style>
+            .preview-badge{display:inline-block;background:#e8f5ee;color:#1a7f4b;font-weight:600;padding:6px 14px;border-radius:999px;font-size:14px;margin-bottom:8px}
+            .preview-unlock{text-align:center;margin-top:24px;padding-top:20px;border-top:1px dashed #e2e2e2}
+            .preview-lock-text{font-size:15px;color:#555;margin-bottom:14px}
+            .preview-lock-text strong{color:#e0532f}
+            .preview-note{font-size:12px;color:#999;margin-top:10px}
+            #unlock-full-btn{font-size:17px;padding:12px 28px}
+        </style>
+        <div class="container">
+            <div class="rewrite-header">
+                <div class="preview-badge">🎁 免费预览 · 正文前 200 词改写效果</div>
+                <p class="rewrite-order">先看你自己文章的改写效果，满意再解锁全文</p>
+            </div>
+            <div class="rewrite-comparison">
+                <div class="comparison-card original-card">
+                    <div class="comparison-header">
+                        <h4>原文（前 200 词）</h4>
+                        <div class="comparison-score"><span class="score-badge" id="prev-orig-score">0%</span></div>
+                    </div>
+                    <div class="comparison-text" id="preview-original-text"></div>
+                </div>
+                <div class="comparison-arrow">→</div>
+                <div class="comparison-card rewritten-card">
+                    <div class="comparison-header">
+                        <h4>改写后（前 200 词）</h4>
+                        <div class="comparison-score">
+                            <span class="score-badge improved" id="prev-new-score">0%</span>
+                            <span class="improvement-badge" id="prev-improvement">↓ 0%</span>
+                        </div>
+                    </div>
+                    <div class="comparison-text" id="preview-rewritten-text"></div>
+                </div>
+            </div>
+            <div class="preview-unlock">
+                <p class="preview-lock-text">🔒 剩余 <strong id="preview-remaining">0</strong> 词已锁定，解锁全文即可查看完整改写</p>
+                <button class="btn btn-primary btn-lg" id="unlock-full-btn" onclick="unlockFullRewrite()" disabled>🔓 解锁全文改写</button>
+                <p class="preview-note">全文改写消耗词数额度（注册已送 200 词，超出按 ¥{{ price_per_1000_words }}/千词计费）</p>
+            </div>
+        </div>
+    </section>
+
     <!-- ============ REWRITE RESULT ============ -->
     <section class="section rewrite-section" id="rewrite-section" style="display:none;">
         <div class="container">
@@ -504,7 +547,7 @@
     <script src="{{ url_for('static', filename='common.js', v='20260824-1') }}"></script>
     <script src="{{ url_for('static', filename='auth.js') }}"></script>
     <script src="{{ url_for('static', filename='payment.js', v='20260831-2') }}"></script>
-    <script src="{{ url_for('static', filename='main.js', v='20260902-1') }}"></script>
+    <script src="{{ url_for('static', filename='main.js', v='20260902-2') }}"></script>
 <script>
 // Dynamic copyright year
 document.getElementById('copyright-year').textContent = new Date().getFullYear();

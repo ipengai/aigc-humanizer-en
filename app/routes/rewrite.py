@@ -2,6 +2,7 @@
 Rewrite routes — execute text humanization and save order record.
 """
 
+import hashlib
 import logging
 from flask import Blueprint, request, jsonify, session
 from app.extensions import limiter
@@ -9,6 +10,14 @@ from app.helpers import generate_order_id, get_db, login_required, rewrite_and_a
 from config import PRICE_PER_1000_WORDS
 
 rewrite_bp = Blueprint('rewrite', __name__)
+
+
+def _preview_rate_limit_key():
+    """Rate-limit paid upstream preview work per account, not shared proxy IP."""
+    user_id = session.get('user_id')
+    if user_id:
+        return f"rewrite-preview:user:{user_id}"
+    return f"rewrite-preview:ip:{request.remote_addr or 'unknown'}"
 
 
 @rewrite_bp.route('/api/rewrite', methods=['POST'])
@@ -214,3 +223,80 @@ def api_rewrite_progress():
     response = jsonify(progress)
     response.headers['Cache-Control'] = 'no-store, private'
     return response
+
+
+@rewrite_bp.route('/api/rewrite-preview', methods=['POST'])
+@limiter.limit("10 per day", key_func=_preview_rate_limit_key)
+@limiter.limit("3 per minute", key_func=_preview_rate_limit_key)
+@login_required
+def api_rewrite_preview():
+    """免费预览：改写用户文档正文前 200 词，供付费前建立信任。
+
+    不扣用户词数余额、不建订单；仅消耗极少第三方改写额度作为获客成本。
+    取正文（跳过封面/目录噪声）前 200 词改写并返回前后对比。
+    """
+    from app.helpers.preview import (
+        cache_preview,
+        extract_body_preview,
+        get_cached_preview,
+    )
+    from app.helpers.tasks import rewrite_and_analyze
+    from app.helpers.analysis_helpers import derive_risk_level
+
+    data = request.get_json(silent=True) or {}
+    # Preview only the document that passed /api/analyze. Accepting arbitrary
+    # request text would turn this endpoint into a free chunked rewrite API.
+    text = (session.get('last_text') or '').strip()
+    if not text:
+        return jsonify({"error": "请先上传文档或粘贴英文文本"}), 400
+
+    mode = data.get('mode')
+    if mode not in ('low', 'median', 'high'):
+        mode = 'median'
+
+    user_id = session.get('user_id')
+    text_hash = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    cache_key = f"{user_id}:{mode}:{text_hash}"
+    cached = get_cached_preview(cache_key)
+    if cached:
+        cached['cached'] = True
+        return jsonify(cached)
+
+    preview_text = extract_body_preview(
+        text, max_words=200, paragraphs=session.get('last_paragraphs')
+    )
+    if not preview_text:
+        return jsonify({"error": "未能提取正文预览"}), 400
+
+    try:
+        result = rewrite_and_analyze(preview_text, mode=mode)
+    except Exception:
+        logging.exception("Preview rewrite failed")
+        return jsonify({"error": "预览改写失败，请稍后重试"}), 500
+
+    original_analysis = result.get('original_analysis') or {}
+    rewritten_analysis = result.get('rewritten_analysis') or {}
+    original_score = original_analysis.get('ai_score', 0) or 0
+    rewritten_score = rewritten_analysis.get('ai_score', 0) or 0
+
+    response_data = {
+        "success": True,
+        "is_preview": True,
+        "cached": False,
+        "mode": mode,
+        "original": {
+            "text": preview_text,
+            "ai_score": round(original_score, 1),
+            "risk_level": derive_risk_level(original_score),
+        },
+        "rewritten": {
+            "text": result.get('humanized', ''),
+            "ai_score": round(rewritten_score, 1),
+            "risk_level": derive_risk_level(rewritten_score),
+        },
+        "improvement": round(original_score - rewritten_score, 1),
+        "preview_words": len(preview_text.split()),
+        "full_word_count": len(text.split()),
+    }
+    cache_preview(cache_key, response_data)
+    return jsonify(response_data)

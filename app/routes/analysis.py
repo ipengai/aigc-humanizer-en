@@ -61,7 +61,7 @@ def api_analyze():
             try:
                 paragraphs = extract_text(filepath)
                 text = paragraph_list_to_text(paragraphs)
-                if ext == '.docx':
+                if ext in ('.docx', '.pdf'):
                     source_file_key = filename
                     shutil.copy2(
                         filepath,

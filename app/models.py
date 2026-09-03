@@ -418,7 +418,8 @@ class Order:
             (user_id, order_id, original_text, paragraphs_json,
              original_format, original_filename, word_count, price, mode,
              word_count, User.get_balance(conn, user_id), source_file_key,
-             'pending' if source_file_key else 'not_applicable', created_at, expires_at)
+             'pending' if source_file_key and original_format == 'docx'
+             else 'not_applicable', created_at, expires_at)
         )
         cls._apply_input_analysis_context(
             conn, order_id, paragraphs, original_filename, analysis_context
@@ -540,7 +541,9 @@ class Order:
             (user_id, order_id, original_text, paragraphs_json,
              original_format, original_filename,
              word_count, price, mode, price, recharge_words, balance_words_used,
-             source_file_key, 'pending' if source_file_key else 'not_applicable',
+             source_file_key,
+             'pending' if source_file_key and original_format == 'docx'
+             else 'not_applicable',
              created_at, expires_at)
         )
         cls._apply_input_analysis_context(

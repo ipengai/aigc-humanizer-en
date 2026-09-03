@@ -40,6 +40,7 @@ def mark_reference_sections(paragraphs):
             in_reference = _is_reference_heading(paragraph)
         elif in_reference:
             paragraph['is_reference'] = True
+            paragraph['node_type'] = 'reference'
     return paragraphs
 
 

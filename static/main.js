@@ -140,10 +140,9 @@ async function handleAnalyzeResponse(data) {
 
     // 检测完成，不展示分析结果页，直接进入一键改写流程
     updateRewriteButton(wordCount, price);
-    scrollToResults();
 
-    // 自动触发改写（余额够→对比，不够→充值）
-    triggerRewrite(wordCount, price);
+    // 检测完成：先免费预览前 200 词（建立信任），全文需解锁才改写
+    triggerPreview(wordCount, price);
 
     // Baidu Tongji: track analysis complete
     if (typeof _hmt !== 'undefined') _hmt.push(['_trackEvent', 'engagement', 'analyze_complete', '', aiScore]);
@@ -228,6 +227,158 @@ function initModeDropdown() {
 }
 
 initModeDropdown();
+
+/* ========== 免费预览（前200词，付费前建立信任） ========== */
+let _previewContext = { wordCount: 0, price: 0, mode: 'median' };
+let _previewRequestToken = 0;
+let _previewAbortController = null;
+
+function setPreviewUnlockEnabled(enabled) {
+    const button = document.getElementById('unlock-full-btn');
+    if (button) button.disabled = !enabled;
+}
+
+function updateImprovementBadge(element, rawImprovement) {
+    if (!element) return;
+    const improvement = Number(rawImprovement) || 0;
+    if (improvement > 0) {
+        element.textContent = `↓ ${Math.abs(improvement)}%`;
+        element.style.background = improvement > 30 ? '#10b981' : improvement > 15 ? '#f59e0b' : '#6b7280';
+    } else if (improvement < 0) {
+        element.textContent = `↑ ${Math.abs(improvement)}%`;
+        element.style.background = '#dc2626';
+    } else {
+        element.textContent = '→ 0%';
+        element.style.background = '#6b7280';
+    }
+}
+
+function showPreviewFallback(message) {
+    const section = document.getElementById('preview-section');
+    const origEl = document.getElementById('preview-original-text');
+    const rewEl = document.getElementById('preview-rewritten-text');
+    const remEl = document.getElementById('preview-remaining');
+    const origScore = document.getElementById('prev-orig-score');
+    const newScore = document.getElementById('prev-new-score');
+    const impEl = document.getElementById('prev-improvement');
+
+    if (origEl) origEl.textContent = '免费预览暂时不可用。';
+    if (rewEl) rewEl.textContent = '您仍可直接解锁全文改写。';
+    if (remEl) remEl.textContent = _previewContext.wordCount;
+    if (origScore) origScore.textContent = '--';
+    if (newScore) newScore.textContent = '--';
+    if (impEl) {
+        impEl.textContent = '--';
+        impEl.style.background = '#6b7280';
+    }
+    if (section) section.style.display = 'block';
+    setPreviewUnlockEnabled(true);
+    showToast(message || '预览生成失败，可直接解锁全文', 'info');
+}
+
+/* 检测完成后自动触发免费预览：改写正文前200词，展示效果，全文需解锁 */
+async function triggerPreview(wordCount, price) {
+    const section = document.getElementById('preview-section');
+    const origEl = document.getElementById('preview-original-text');
+    const rewEl = document.getElementById('preview-rewritten-text');
+    if (!section) return;
+
+    if (_previewAbortController) _previewAbortController.abort();
+    _previewAbortController = new AbortController();
+    const requestToken = ++_previewRequestToken;
+    const signal = _previewAbortController.signal;
+    const mode = getSelectedMode();
+    _previewContext = {
+        wordCount: Number(wordCount) || 0,
+        price: Number(price) || 0,
+        mode
+    };
+
+    // 显示预览区 + 加载态；结果就绪前禁止触发错误的 0 词支付上下文。
+    section.style.display = 'block';
+    if (origEl) origEl.textContent = '正在生成免费预览…';
+    if (rewEl) rewEl.textContent = '生成中…';
+    setPreviewUnlockEnabled(false);
+    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    try {
+        const resp = await _csrfFetch('/api/rewrite-preview', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+            signal
+        });
+        let data;
+        try {
+            data = await resp.json();
+        } catch (_) {
+            data = {};
+        }
+        if (requestToken !== _previewRequestToken) return;
+        if (resp.ok && data && data.success) {
+            displayPreviewResult(data, wordCount, price);
+        } else {
+            showPreviewFallback(data && data.error ? data.error : '预览生成失败，可直接解锁全文');
+        }
+    } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        if (requestToken !== _previewRequestToken) return;
+        console.warn('Preview failed:', err);
+        showPreviewFallback(getNetworkErrorMessage(err));
+    }
+}
+
+/* 渲染预览结果卡片 */
+function displayPreviewResult(data, wordCount, price) {
+    _previewContext = {
+        wordCount: Number(data.full_word_count) || Number(wordCount) || 0,
+        price: Number(price) || 0,
+        mode: data.mode || _previewContext.mode
+    };
+
+    const origEl = document.getElementById('preview-original-text');
+    const rewEl = document.getElementById('preview-rewritten-text');
+    const remEl = document.getElementById('preview-remaining');
+    const origScore = document.getElementById('prev-orig-score');
+    const newScore = document.getElementById('prev-new-score');
+    const impEl = document.getElementById('prev-improvement');
+
+    if (origEl) origEl.textContent = (data.original && data.original.text) || '';
+    if (rewEl) rewEl.textContent = (data.rewritten && data.rewritten.text) || '';
+
+    const full = data.full_word_count || wordCount || 0;
+    const previewed = data.preview_words || (data.original && data.original.text ? data.original.text.split(/\s+/).length : 0);
+    if (remEl) remEl.textContent = Math.max(0, full - previewed);
+
+    if (origScore) origScore.textContent = (data.original && data.original.ai_score != null ? data.original.ai_score : 0) + '%';
+    if (newScore) newScore.textContent = (data.rewritten && data.rewritten.ai_score != null ? data.rewritten.ai_score : 0) + '%';
+    updateImprovementBadge(impEl, data.improvement);
+
+    const section = document.getElementById('preview-section');
+    if (section) section.style.display = 'block';
+    setPreviewUnlockEnabled(true);
+}
+
+/* 解锁全文改写：复用现有 triggerRewrite（走余额/充值计费） */
+function unlockFullRewrite() {
+    if (!_previewContext.wordCount || _previewContext.wordCount < 1) {
+        showToast('未找到待改写文本，请重新分析', 'error');
+        return;
+    }
+    if (_previewContext.mode !== getSelectedMode()) {
+        showToast('改写模式已切换，正在重新生成对应预览', 'info');
+        triggerPreview(_previewContext.wordCount, _previewContext.price);
+        return;
+    }
+    _previewRequestToken++;
+    if (_previewAbortController) {
+        _previewAbortController.abort();
+        _previewAbortController = null;
+    }
+    const section = document.getElementById('preview-section');
+    if (section) section.style.display = 'none';
+    triggerRewrite(_previewContext.wordCount, _previewContext.price);
+}
 
 /* 一键改写：余额够→直接改写对比，不够→跳支付宝充值 */
 async function triggerRewrite(wordCount, price) {

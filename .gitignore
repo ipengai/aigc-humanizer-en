@@ -11,6 +11,8 @@ __pycache__/
 # 虚拟环境
 venv/
 .venv/
+tmp/
+output/
 
 # 数据库（敏感数据）
 instance/

@@ -1,0 +1,128 @@
+/* ============================================================
+   AI 检测子页面（/ai-detect/）专属样式
+   配色沿用 Huma :root 变量（--primary indigo / --accent cyan）
+   ============================================================ */
+
+/* 当前导航 tab 高亮 */
+.nav-current{color:var(--primary);font-weight:700}
+
+/* Hero 左栏微调 */
+.det-hero-mono{font-size:4rem}
+.det-hero-points{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+.det-hero-points span{background:var(--gray-100);border:1px solid var(--gray-200);color:var(--gray-600);border-radius:999px;padding:6px 13px;font-size:13px;font-weight:600}
+
+.loading-sub{margin-top:8px;color:var(--gray-500);font-size:14px}
+
+/* ============ 结果区 ============ */
+.det-result{padding-top:8px}
+.det-result-head{text-align:center;margin-bottom:22px}
+.det-order{color:var(--gray-500);font-size:13px;margin-top:4px}
+
+/* 主分数卡：罗盘 + 大数字 */
+.det-score-card{display:flex;flex-direction:column;align-items:center;background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius);box-shadow:var(--shadow);padding:24px 24px 18px;text-align:center;max-width:520px;margin:0 auto}
+.det-score-card svg{width:100%;max-width:280px;height:auto}
+.det-risk-readout{margin-top:-10px}
+.det-risk-readout .det-risk-label{font-size:14px;color:var(--gray-500)}
+.det-risk-readout .det-risk-num{font-size:44px;font-weight:800;line-height:1.1;letter-spacing:-.02em}
+.det-risk-readout .det-risk-level{font-size:14px;font-weight:700;margin-top:2px}
+
+/* chips 行 */
+.det-chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin:16px auto 4px;max-width:720px}
+.det-chip{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:999px;padding:7px 14px;font-size:13px;color:var(--gray-600);white-space:nowrap}
+.det-chip b{color:var(--gray-900);font-weight:700}
+
+/* 主分数旁的小字说明 */
+.det-meta-line{margin-top:6px;font-size:12.5px;color:var(--gray-400);text-align:center}
+
+/* ============ 归因区 ============ */
+.attribution{background:var(--white);border:1px solid var(--gray-200);border-radius:var(--radius);box-shadow:var(--shadow-sm);padding:18px 20px;margin:22px auto 0;max-width:760px}
+.attribution h3{margin-bottom:8px;font-size:17px}
+.attr-lead{color:var(--gray-600);font-size:14.5px;line-height:1.75;margin-bottom:6px}
+.attr-caption{font-size:12.5px;color:var(--gray-400);margin-bottom:14px}
+.attr-row{display:grid;grid-template-columns:132px 1fr 52px;gap:10px;align-items:center;margin:9px 0}
+.attr-label{font-size:13px;color:var(--gray-600);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attr-track{background:var(--gray-100);border-radius:999px;height:10px;overflow:hidden}
+.attr-fill{display:block;height:100%;min-width:3px;border-radius:999px;transition:width .5s ease}
+.attr-fill.raise{background:linear-gradient(90deg,#fca5a5,#ef4444)}
+.attr-fill.protective{background:linear-gradient(90deg,#6ee7b7,#10b981)}
+.attr-pct{font-size:13px;font-weight:700;color:var(--gray-700);text-align:left}
+.attr-takeaway{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius-sm);padding:10px 14px;margin-top:14px;font-size:14px;color:var(--gray-700);line-height:1.7}
+.attr-takeaway b{color:var(--primary-dark)}
+
+/* ============ 段落定位 ============ */
+.det-section-title{font-size:19px;font-weight:700;margin:30px auto 14px;max-width:760px;color:var(--gray-900)}
+#det-paragraphs{max-width:760px;margin:0 auto}
+.paragraph{background:var(--white);border:1px solid var(--gray-200);border-left:4px solid var(--gray-300);border-radius:var(--radius-sm);margin:10px 0;padding:12px 14px;box-shadow:var(--shadow-sm)}
+.paragraph.high-risk{border-left-color:var(--danger)}
+.paragraph header{display:flex;justify-content:space-between;gap:12px;font-size:13px;align-items:center;flex-wrap:wrap}
+.p-meta{color:var(--gray-500)}
+.pill{display:inline-flex;align-items:center;border-radius:999px;padding:4px 12px;font-size:12.5px;font-weight:700;white-space:nowrap}
+.pill.high{background:#fef2f2;color:#b91c1c;border:1px solid #fecaca}
+.pill.low{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
+.paragraph p{margin:8px 0 0;color:var(--gray-700);line-height:1.75;white-space:pre-wrap;font-size:14.5px;max-height:300px;overflow:auto}
+
+.det-notice{color:var(--gray-400);font-size:12.5px;text-align:center;margin:24px auto 0;max-width:760px;line-height:1.7}
+
+/* 401 需登录遮罩提示 */
+.det-login-hint{text-align:center;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:var(--radius-sm);padding:10px 16px;margin-top:14px;font-size:14px}
+.det-login-hint button{margin-left:8px}
+
+/* 充值成功高亮 */
+.det-paid-ok{color:var(--success);font-weight:700}
+
+/* 移动端适配 */
+@media (max-width: 768px){
+    .attr-row{grid-template-columns:96px 1fr 46px;gap:6px}
+    .attr-label{text-align:left}
+}
+
+/* ============ 补充（导航额度/充值按钮兜底） ============ */
+.nav-balance-low{color:var(--danger)!important;border-color:#fecaca!important;cursor:pointer}
+.nav-balance-low:hover{background:#fef2f2}
+
+/* 充值套餐按钮（若主样式缺失时兜底） */
+.recharge-options{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.recharge-option{flex:1 1 88px;border:1px solid var(--gray-200);background:var(--gray-50);border-radius:var(--radius-sm);padding:8px 6px;font:600 13px/1.35 inherit;color:var(--gray-600);cursor:pointer;transition:all .15s}
+.recharge-option.active,.recharge-option:hover{border-color:var(--primary);background:var(--primary-bg);color:var(--primary-dark)}
+.recharge-option small{font-weight:400;opacity:.8}
+.recharge-custom{flex:1 1 88px}
+
+/* ===== 上传区文件已选状态（就地反馈，非 textarea placeholder） ===== */
+.drop-zone.has-file .drop-icon { color: var(--success); }
+.drop-zone.has-file .drop-text { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.drop-zone.has-file .file-size { color: var(--gray-400); font-size: 0.85rem; font-weight: 400; }
+.drop-zone .remove-file { color: var(--danger) !important; margin-left: 4px; }
+.drop-zone .remove-file:hover { text-decoration: underline !important; }
+
+/* ===== 检测充值弹窗：自动按需充值模式 ===== */
+/* auto 模式：只显示明细卡 + 居中按钮，整列居中 */
+.payment-split-layout.auto{justify-content:center}
+.payment-split-layout.auto .payment-summary{display:none}
+.det-auto-box{
+    background:var(--primary-bg);
+    border:1px solid #c7d2fe;
+    border-radius:var(--radius-md);
+    padding:22px 22px 18px;
+    text-align:center;
+    width:100%;
+    max-width:340px;
+    display:flex;
+    flex-direction:column;
+    align-items:stretch;
+    gap:14px
+}
+.det-auto-title{font-weight:700;color:var(--primary-dark);font-size:15px;text-align:center}
+.det-auto-bill{background:#fff;border:1px solid #e0e7ff;border-radius:var(--radius-sm);padding:12px 14px;text-align:left}
+.det-bill-row{display:flex;justify-content:space-between;font-size:13.5px;color:var(--gray-600);padding:4px 0;line-height:1.5}
+.det-bill-row span:last-child{color:var(--gray-800);font-variant-numeric:tabular-nums;font-weight:500}
+.det-bill-row.bill-gap{margin-top:6px;padding-top:8px;border-top:1px dashed #e5e7eb}
+.det-bill-row.bill-total{color:var(--primary-dark);font-weight:600;font-size:14px}
+.det-bill-row.bill-total span:last-child{color:var(--primary);font-size:15px}
+.det-auto-submit{width:100%;margin-top:2px}
+.det-picker-toggle{margin:0;text-align:center;font-size:12.5px;color:var(--gray-500)}
+.det-picker-toggle a{color:var(--gray-500);text-decoration:underline}
+.det-picker-toggle a:hover{color:var(--primary)}
+/* 下单后：隐藏左侧摘要/档位，二维码居中展示 */
+.payment-split-layout.paying .payment-summary{display:none}
+.payment-split-layout.paying .det-auto-box{display:none}
+.payment-split-layout.paying{justify-content:center}

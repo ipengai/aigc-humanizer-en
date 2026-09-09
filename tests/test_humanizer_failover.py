@@ -86,7 +86,9 @@ class BlockFailoverTests(unittest.TestCase):
             },
         ]
 
-    def test_short_blocks_share_primary_request_but_heading_stays_between(self):
+    def test_cross_block_sends_heading_in_stream_and_force_restores_it(self):
+        # P1 语义（median/high 跨边界）：标题不再是硬边界，随正文进同一个
+        # 改写块（一次请求），输出段数一致时按段位强制还原为原标题文本。
         primary = ParagraphBatchStub("primary")
         fallback = StubHumanizer("deepseek")
         humanizer = FailoverHumanizer(primary, fallback)
@@ -98,17 +100,46 @@ class BlockFailoverTests(unittest.TestCase):
         )
 
         self.assertEqual(len(primary.calls), 1)
-        self.assertEqual(len(primary.calls[0].split("\n\n")), 3)
+        # 标题行随块发送 → 请求含 4 个 \n\n 段（正文+标题+正文）
+        self.assertEqual(len(primary.calls[0].split("\n\n")), 4)
         self.assertEqual(fallback.calls, [])
-        self.assertEqual(len(structured), 3)
-        self.assertEqual(structured[0]["text"].count("primary:"), 2)
-        self.assertTrue(structured[1]["is_heading"])
-        self.assertEqual(structured[1]["text"], "Protected section title")
-        self.assertEqual(structured[2]["text"].count("primary:"), 1)
-        output_parts = output.split("\n\n")
-        self.assertEqual(output_parts[2], "Protected section title")
+        # 单个跨边界改写块 → 1 个 structured 条目
+        self.assertEqual(len(structured), 1)
+        # 输出与 structured 里标题位置被强制还原为原文
+        output_segs = output.split("\n\n")
+        self.assertEqual(len(output_segs), 4)
+        self.assertEqual(output_segs[2], "Protected section title")
+        self.assertEqual(structured[0]["text"].split("\n\n")[2],
+                         "Protected section title")
+        self.assertTrue(structured[0]["was_rewritten"])
 
-    def test_collapsed_batch_is_discarded_and_short_blocks_fall_back(self):
+    def test_docx_cross_block_returns_one_structured_item_per_source_paragraph(self):
+        primary = ParagraphBatchStub("primary")
+        humanizer = FailoverHumanizer(primary, StubHumanizer("fallback"))
+        paragraphs = self._short_sections_with_heading()
+        for index, item in enumerate(paragraphs):
+            item.update({
+                "source_format": "docx",
+                "body_index": index,
+                "style": "Heading 2" if item.get("is_heading") else "Normal",
+            })
+
+        output, structured = humanizer.humanize_structured(
+            "ignored", mode="median", paragraphs=paragraphs,
+        )
+
+        self.assertEqual(len(output.split("\n\n")), 4)
+        self.assertEqual(len(structured), 4)
+        self.assertEqual(
+            [item["source_body_indexes"] for item in structured],
+            [[0], [1], [2], [3]],
+        )
+        self.assertFalse(structured[2]["was_rewritten"])
+        self.assertEqual(structured[2]["text"], "Protected section title")
+
+    def test_collapsed_cross_block_degrades_to_median_blocks_heading_protected(self):
+        # 主服务返回段数失配（折叠）→ 无法安全定位标题 → 该区间按 median 重切：
+        # 标题恢复硬边界，正文按 3 段聚合重试主服务（最坏≈旧 median 行为，标题零改动）。
         primary = ParagraphBatchStub("primary", collapse_batch=True)
         fallback = StubHumanizer("deepseek")
         humanizer = FailoverHumanizer(primary, fallback)
@@ -119,13 +150,20 @@ class BlockFailoverTests(unittest.TestCase):
             paragraphs=self._short_sections_with_heading(),
         )
 
-        self.assertEqual(len(primary.calls), 1)
-        self.assertEqual(len(fallback.calls), 2)
+        # 1 次跨边界请求失败 + median 重切后 2 个正文块（标题段不改写）
+        self.assertEqual(len(primary.calls), 3)
+        self.assertEqual(fallback.calls, [])
         self.assertEqual(len(structured), 3)
+        # 标题仍作为保护段原样保留在正确位置
         self.assertTrue(structured[1]["is_heading"])
+        self.assertFalse(structured[1]["was_rewritten"])
         self.assertEqual(structured[1]["text"], "Protected section title")
         output_parts = output.split("\n\n")
-        self.assertEqual(output_parts[2], "Protected section title")
+        self.assertEqual(len(output_parts), 3)
+        self.assertEqual(output_parts[1], "Protected section title")
+        # 正文段已改写
+        self.assertEqual(structured[0]["text"].count("primary:"), 1)
+        self.assertEqual(structured[2]["text"].count("primary:"), 1)
 
 
 if __name__ == "__main__":

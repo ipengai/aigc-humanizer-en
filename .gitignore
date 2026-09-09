@@ -13,6 +13,9 @@ venv/
 .venv/
 tmp/
 output/
+experiment/
+detector_web/
+feishu_*.csv
 
 # 数据库（敏感数据）
 instance/

@@ -48,16 +48,17 @@ function showPaymentModalWithAiScore(wordCount, price, aiScore, balance = 0, sho
     document.getElementById('pay-current-balance').textContent = `${balance} 词`;
     document.getElementById('pay-recharge-words').textContent = `${shortfall} 词`;
 
-    // Update AI score display
+    // 兜底：第三方 / 旧版本如果仍传入原始 float，统一保留 1 位小数，避免显示 53.35044016517786% 这类长串
+    const safeAiScore = Math.round(Number(aiScore || 0) * 10) / 10;
     const aiScoreDisplay = document.getElementById('ai-score-display');
     if (aiScoreDisplay) {
-        aiScoreDisplay.textContent = `${aiScore}%`;
+        aiScoreDisplay.textContent = `${safeAiScore}%`;
         // Set color based on score
-        if (aiScore < 20) {
+        if (safeAiScore < 20) {
             aiScoreDisplay.style.color = '#10b981';
-        } else if (aiScore < 40) {
+        } else if (safeAiScore < 40) {
             aiScoreDisplay.style.color = '#f59e0b';
-        } else if (aiScore < 60) {
+        } else if (safeAiScore < 60) {
             aiScoreDisplay.style.color = '#f97316';
         } else {
             aiScoreDisplay.style.color = '#ef4444';
@@ -566,17 +567,22 @@ function displayRewriteResult(data) {
     const downloadBtn = document.getElementById('download-btn');
     downloadBtn.textContent = `⬇️ 下载为 ${fmt.toUpperCase()}`;
 
+    // 兜底 1 位小数，避免历史缓存或后端回退导致长串小数
+    const fmtScore = (v) => (Math.round(Number(v || 0) * 10) / 10);
+
     // Original
-    document.getElementById('orig-score-badge').textContent = `预估 AI 率 ${data.original.ai_score}%`;
+    const origScoreVal = fmtScore(data.original.ai_score);
+    document.getElementById('orig-score-badge').textContent = `预估 AI 率 ${origScoreVal}%`;
     document.getElementById('orig-score-badge').style.background =
-        data.original.ai_score > 40 ? '#fde8e8' : data.original.ai_score > 20 ? '#fef3c7' : '#d1fae5';
+        origScoreVal > 40 ? '#fde8e8' : origScoreVal > 20 ? '#fef3c7' : '#d1fae5';
     document.getElementById('orig-risk').textContent = data.original.risk_level;
     document.getElementById('rewrite-original-text').textContent = data.original.text;
 
     // Rewritten
-    document.getElementById('new-score-badge').textContent = `预估 AI 率 ${data.rewritten.ai_score}%`;
+    const rewScoreVal = fmtScore(data.rewritten.ai_score);
+    document.getElementById('new-score-badge').textContent = `预估 AI 率 ${rewScoreVal}%`;
     document.getElementById('new-risk').textContent = data.rewritten.risk_level;
-    document.getElementById('improvement-badge').textContent = `↓ ${data.improvement}%`;
+    document.getElementById('improvement-badge').textContent = `↓ ${fmtScore(data.improvement)}%`;
     document.getElementById('improvement-badge').style.background =
         data.improvement > 30 ? '#10b981' : data.improvement > 15 ? '#f59e0b' : '#6b7280';
 
@@ -589,7 +595,7 @@ function displayRewriteResult(data) {
     document.getElementById('diff-toggle-checkbox').checked = false;
     document.getElementById('diff-legend').style.display = 'none';
 
-    showToast(`✅ 改写完成！预估 AI 率从 ${data.original.ai_score}% 降至 ${data.rewritten.ai_score}%`, 'success');
+    showToast(`✅ 改写完成！预估 AI 率从 ${origScoreVal}% 降至 ${rewScoreVal}%`, 'success');
 
     setTimeout(() => {
         section.scrollIntoView({ behavior: 'smooth' });

@@ -28,7 +28,9 @@ class AITextHumanizerMock(AITextHumanizer):
 
     def _call_api(self, text):
         """
-        Mock 单次改写：随机 sleep 1-1.5s，返回轻微改写的假文本。
+        Mock 单次改写：随机 sleep 1-1.5s，原样返回文本。
+
+        Mock 只模拟请求耗时和成功响应，绝不能向用户正文写入调试标记。
         """
         import random as _random
         duration = _random.uniform(1.0, 1.5)
@@ -38,9 +40,8 @@ class AITextHumanizerMock(AITextHumanizer):
             self._count_words(text), duration,
         )
         time.sleep(duration)
-        # Mock 输出标出每次实际送审的分块边界，便于核对 segment 结果。
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        result = '++++++++\n' + ' '.join(lines)
+        # 原样返回可完整保留段落边界，也不会把测试标识泄漏进下载文件。
+        result = text
         logger.info(
             "rewrite stage=rewrite backend=ai_text_humanizer_mock action=call_ok words=%d out_chars=%d elapsed=%.0fms",
             self._count_words(text), len(result), (time.time() - start) * 1000,

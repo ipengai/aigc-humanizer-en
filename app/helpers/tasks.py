@@ -48,6 +48,13 @@ def get_cached_original_analysis(text):
         return _ORIGINAL_ANALYSIS_CACHE.get(h)
 
 
+def _analysis_score(analysis):
+    """Read the legacy ai_score or the v2 risk_percent alias."""
+    analysis = analysis or {}
+    value = analysis.get('ai_score')
+    return value if value is not None else (analysis.get('risk_percent') or 0)
+
+
 # ── 改写进度注册表 ────────────────────────────
 # 按 order_id 记录改写/检测的真实进度，供前端轮询展示。
 # SQLite 是跨 worker 的事实来源；内存只保留短期缓存。
@@ -57,7 +64,7 @@ _REWRITE_PROGRESS_TTL_SECONDS = 3600
 _DELIVERY_RETRY_LOCK = threading.Lock()
 _DELIVERY_RETRY_TIMERS = {}
 _DELIVERED_ORDERS = set()
-REWRITE_PIPELINE_VERSION = "2026-09-01-v1"
+REWRITE_PIPELINE_VERSION = "2026-09-09-v2"
 
 
 def _describe_humanizer(adapter):
@@ -113,6 +120,47 @@ def _planned_rewrite_metadata(adapter):
         'humanizer_primary': primary['backend'],
         'humanizer_fallback': fallback['backend'] if fallback else None,
         'rewrite_pipeline_version': REWRITE_PIPELINE_VERSION,
+    }
+
+
+def _routed_effective_metadata(routed, default_effective, default_backend):
+    """Derive order dimensions from providers that actually handled blocks."""
+    steps = routed.get('steps') or []
+    actions = []
+    backends = []
+    for step in steps:
+        for action in step.get('action_chain') or [step.get('action')]:
+            if action and action not in ('protect', 'needs_review'):
+                actions.append(action)
+        for backend in step.get('rewrite_backends') or [step.get('rewrite_backend')]:
+            if backend:
+                backends.append(backend)
+
+    actions = list(dict.fromkeys(actions))
+    backends = list(dict.fromkeys(backends))
+    if not actions:
+        route_action = (routed.get('route') or {}).get('action')
+        if route_action in ('protect', 'needs_review'):
+            return {
+                'method': 'none',
+                'provider': None,
+                'model': None,
+                'backend': route_action,
+            }
+        return {**default_effective, 'backend': default_backend}
+
+    method_map = {
+        'translation': 'translation',
+        'huma': 'api',
+        'llm': 'llm',
+        'rule': 'rule',
+    }
+    methods = list(dict.fromkeys(method_map.get(action, action) for action in actions))
+    return {
+        'method': methods[0] if len(methods) == 1 else 'hybrid',
+        'provider': '+'.join(backends) or None,
+        'model': None,
+        'backend': '->'.join(backends) or default_backend,
     }
 
 
@@ -245,7 +293,8 @@ def _run_delivered_rewrite(order_id, text, mode, paragraphs):
 
 
 def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None,
-                        progress_cb=None):
+                        progress_cb=None, routing_policy_override=None,
+                        humanizer_override=None):
     """执行改写与 AI 检测，返回结构化结果。余额同步与付费异步共用。
 
     Args:
@@ -254,6 +303,9 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
         paragraphs: 可选段落结构（list[dict]），用于结构保护。
         original_analysis: 可选，预计算的原文检测结果（由 /api/analyze 缓存复用）；
             None 时重新检测，用于省去重复 sapling 调用。
+        routing_policy_override: 可选，仅供预览等受限场景显式选择编排策略；
+            正式订单留空并使用 config.py 配置。
+        humanizer_override: 可选，受限场景指定一次性改写器；正式订单留空。
 
     Returns:
         dict:
@@ -267,14 +319,25 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
     Raises:
         改写或检测失败时向上抛异常，由调用方决定错误处理（余额回滚/标记失败）。
     """
-    from app.extensions import humanizer_adapter, ai_detector as analyze_text
+    from app.extensions import (
+        humanizer_adapter, ai_detector as analyze_text, rewrite_providers,
+    )
+    from app.pipeline.orchestrator import RewriteOrchestrator
+    import config as project_config
+    routing_policy = (
+        routing_policy_override
+        or getattr(project_config, 'REWRITE_ROUTING_POLICY', 'legacy_whole_document')
+    )
     from app.humanizer.events import is_fallback_event
 
     # 进度：原文检测
     if original_analysis is None and progress_cb:
         progress_cb(stage="detect", message="正在检测原文 AI 率")
 
-    plan = _humanizer_plan(humanizer_adapter)
+    effective_humanizer = humanizer_override or humanizer_adapter
+    plan = _humanizer_plan(effective_humanizer)
+    if original_analysis and original_analysis.get('error_code'):
+        raise RuntimeError(f"原文检测不可用: {original_analysis.get('error_code')}")
     execution_trace = {
         'rewrite_block_count': 0,
         'fallback_blocks': set(),
@@ -283,7 +346,7 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
 
     def _traced_progress(stage, block=None, total_blocks=None, message="",
                          event=None):
-        if total_blocks:
+        if total_blocks and stage == "rewrite":
             execution_trace['rewrite_block_count'] = max(
                 execution_trace['rewrite_block_count'], int(total_blocks)
             )
@@ -299,15 +362,47 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
                 message=message, event=event,
             )
 
-    humanized, rewritten_paragraphs = humanizer_adapter.humanize_structured(
-        text, mode=mode, paragraphs=paragraphs, progress_cb=_traced_progress
+    orchestrator = RewriteOrchestrator(
+        effective_humanizer, analyze_text, providers=rewrite_providers,
     )
+    routed = orchestrator.run(
+        text, mode=mode, paragraphs=paragraphs,
+        original_analysis=original_analysis,
+        policy=routing_policy,
+        progress_cb=_traced_progress,
+    )
+    humanized = routed['humanized']
+    rewritten_paragraphs = routed['rewritten_paragraphs']
     # 进度：改写后检测
     if progress_cb:
         progress_cb(stage="detect_again", message="正在检测改写后 AI 率")
     if original_analysis is None:
         original_analysis = analyze_text(text, stage="rewrite_detect_original")
     rewritten_analysis = analyze_text(humanized, stage="rewrite_detect_rewritten")
+    if (original_analysis or {}).get('error_code'):
+        raise RuntimeError(f"原文检测不可用: {original_analysis.get('error_code')}")
+    if (rewritten_analysis or {}).get('error_code'):
+        raise RuntimeError(f"改写后检测不可用: {rewritten_analysis.get('error_code')}")
+
+    targeted = {
+        'steps': [],
+        'summary': {'triggered': False, 'rounds': 0, 'blocks': 0},
+    }
+    if routing_policy == 'risk_band_segmented':
+        targeted = orchestrator.run_targeted_second_pass(
+            humanized,
+            rewritten_paragraphs,
+            rewritten_analysis,
+            mode=mode,
+            progress_cb=_traced_progress,
+        )
+        humanized = targeted['humanized']
+        rewritten_paragraphs = targeted['rewritten_paragraphs']
+        rewritten_analysis = targeted['analysis']
+        if targeted.get('steps'):
+            routed.setdefault('steps', []).extend(targeted['steps'])
+            routed['route'] = dict(routed.get('route') or {})
+            routed['route']['second_pass'] = targeted['summary']
     primary = plan['primary']
     fallback = plan['fallback']
     whole_fallback = execution_trace['whole_document_fallback']
@@ -330,19 +425,34 @@ def rewrite_and_analyze(text, mode=None, paragraphs=None, original_analysis=None
         effective = primary
         humanizer_backend = primary['backend']
 
+    routed_effective = _routed_effective_metadata(
+        routed, effective, humanizer_backend
+    )
+    humanizer_backend = routed_effective['backend']
+    route_action = (routed.get('route') or {}).get('action')
+    rewrite_block_count = execution_trace['rewrite_block_count']
+    if not rewrite_block_count and route_action not in ('protect', 'needs_review'):
+        rewrite_block_count = 1
     rewrite_metadata = {
         'humanizer_backend': humanizer_backend,
-        'rewrite_method': effective.get('method'),
-        'rewrite_provider': effective.get('provider') or None,
-        'rewrite_model': effective.get('model') or None,
+        'rewrite_method': routed_effective.get('method'),
+        'rewrite_provider': routed_effective.get('provider') or None,
+        'rewrite_model': routed_effective.get('model') or None,
         'humanizer_primary': primary['backend'],
         'humanizer_fallback': fallback['backend'] if fallback else None,
         'fallback_used': fallback_used,
         'fallback_block_count': (
             fallback_block_count or (1 if whole_fallback else 0)
         ),
-        'rewrite_block_count': execution_trace['rewrite_block_count'] or 1,
+        'rewrite_block_count': rewrite_block_count,
         'rewrite_pipeline_version': REWRITE_PIPELINE_VERSION,
+        'routing_policy': routed.get('routing_policy'),
+        'route': routed.get('route'),
+        'steps': routed.get('steps', []),
+        'second_pass_triggered': targeted['summary'].get('triggered', False),
+        'second_pass_rounds': targeted['summary'].get('rounds', 0),
+        'second_pass_blocks': targeted['summary'].get('blocks', 0),
+        'second_pass_summary': targeted['summary'],
     }
 
     return {
@@ -396,8 +506,8 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
         try:
             Order.update_result(
                 conn, order_id, humanized,
-                rewritten_analysis.get('ai_score', 0),
-                original_analysis.get('ai_score', 0),
+                _analysis_score(rewritten_analysis),
+                _analysis_score(original_analysis),
                 rewritten_paragraphs=rewritten_paragraphs,
                 detector_backend=result.get("detector_backend"),
                 humanizer_backend=result.get("humanizer_backend"),
@@ -430,11 +540,17 @@ def do_background_rewrite(order_id, text, mode, paragraphs=None):
                            WHERE order_id = ? AND transaction_type = 'rewrite_refund'""",
                         (order_id,)
                     ).fetchone()
-                    if not existing_refund:
-                        User.add_balance(conn, order['user_id'], order['word_count'])
+                    charged_value = (
+                        order.get('word_count')
+                        if order.get('payment_status') == 'paid'
+                        else order.get('balance_words_used')
+                    )
+                    refund_words = int(charged_value or 0)
+                    if not existing_refund and refund_words > 0:
+                        User.add_balance(conn, order['user_id'], refund_words)
                         balance_after = User.get_balance(conn, order['user_id'])
                         BalanceTransaction.create(
-                            conn, order['user_id'], 'rewrite_refund', order['word_count'],
+                            conn, order['user_id'], 'rewrite_refund', refund_words,
                             balance_after, order_id=order_id, description='改写失败退回词数'
                         )
                         conn.execute(
@@ -538,6 +654,10 @@ def process_payment_success(order_id, trade_no, paid_amount=None):
         if order.get('order_type') == 'product':
             return _deliver_product(tx_conn, order, trade_no, paid_amount)
 
+        # ===== 检测词充值分支：只加检测额度，不触发改写 =====
+        if order.get('order_type') == 'detect_recharge':
+            return _deliver_detection_recharge(tx_conn, order, trade_no, paid_amount)
+
         user_id = order['user_id']
         recharge_words = int(order.get('recharge_words') or order['word_count'])
 
@@ -634,6 +754,52 @@ def _deliver_product(tx_conn, order, trade_no, paid_amount):
     logging.info(
         "Product order delivered: order_id=%s, sku=%s, has_link=%s",
         order['order_id'], sku, bool(delivery_link),
+    )
+    return True
+
+
+def _deliver_detection_recharge(tx_conn, order, trade_no, paid_amount):
+    """
+    检测词充值订单的支付成功处理：只把词数加进检测充值桶，
+    不碰改写余额、不触发改写任务。
+
+    词数存于 orders.recharge_words；到账记 BalanceTransaction(type='detection_recharge')。
+    全程单事务：不在中途调用会隐式 COMMIT 的辅助函数（如 get_detection_quota）。
+    """
+    from app.models import User, BalanceTransaction
+
+    user_id = order['user_id']
+    words = int(order.get('recharge_words') or 0)
+    if user_id is None or words <= 0:
+        tx_conn.rollback()
+        logging.error(
+            "Detection recharge order %s invalid: user=%s words=%s",
+            order['order_id'], user_id, words,
+        )
+        return False
+
+    User.add_detection_words(tx_conn, user_id, words)
+    row = tx_conn.execute(
+        "SELECT detection_paid_words FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
+    paid_after = int(row['detection_paid_words']) if row else 0
+    BalanceTransaction.create(
+        tx_conn, user_id, 'detection_recharge', words,
+        paid_after, order_id=order['order_id'],
+        reference_id=trade_no, description='AI 检测词充值'
+    )
+    tx_conn.execute(
+        """UPDATE orders
+           SET payment_status = 'paid', status = 'completed',
+               alipay_trade_no = ?, alipay_amount = ?, paid_at = ?
+           WHERE order_id = ? AND payment_status IN ('pending', 'expired')""",
+        (trade_no, paid_amount, datetime.now(timezone.utc).isoformat(),
+         order['order_id'])
+    )
+    tx_conn.commit()
+    logging.info(
+        "Detection recharge delivered: order_id=%s, words=%s, paid_bucket=%s",
+        order['order_id'], words, paid_after,
     )
     return True
 

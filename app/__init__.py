@@ -88,7 +88,25 @@ def create_app():
         getattr(project_config, 'HUMANIZER_FALLBACK_ADAPTER', None),
     )
     logging.info("Using %s", type(humanizer_adapter).__name__)
-    set_adapters(payment_adapter, humanizer_adapter)
+    # Optional named providers for risk-band routing. Empty values preserve
+    # the current single-provider deployment and avoid extra API clients.
+    provider_map = {}
+    provider_names = {
+        'translation': getattr(project_config, 'REWRITE_TRANSLATION_ADAPTER', ''),
+        'huma': getattr(project_config, 'REWRITE_HUMA_ADAPTER', ''),
+        'llm': getattr(project_config, 'REWRITE_LLM_ADAPTER', ''),
+    }
+    for route_name, provider_name in provider_names.items():
+        if provider_name:
+            provider_map[route_name] = create_humanizer(provider_name)
+    configured_name = app.config.get('HUMANIZER_ADAPTER', 'rule_based')
+    if configured_name in (
+            'ai_text_humanizer', 'api',
+            'ai_text_humanizer_mock', 'api_mock'):
+        provider_map.setdefault('huma', humanizer_adapter)
+    elif configured_name == 'llm_based':
+        provider_map.setdefault('llm', humanizer_adapter)
+    set_adapters(payment_adapter, humanizer_adapter, provider_map)
 
     # ── AI Detector ──
     detect_fn = create_detector(AI_DETECTOR_ADAPTER)
@@ -116,7 +134,7 @@ def create_app():
 
     # ── Register all blueprints ──
     from app.routes import main_bp, auth_bp, analysis_bp, rewrite_bp, \
-        payment_bp, download_bp, orders_bp, activation_bp
+        payment_bp, download_bp, orders_bp, activation_bp, detect_bp
 
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
@@ -126,6 +144,7 @@ def create_app():
     app.register_blueprint(download_bp)
     app.register_blueprint(orders_bp)
     app.register_blueprint(activation_bp)
+    app.register_blueprint(detect_bp)  # AI Detector 子产品（/ai-detect/*）
 
     # ── Teardown: close database connection ──
     from app.helpers import close_db
@@ -181,14 +200,16 @@ def create_app():
     # ── CSRF Exemptions ──
     # All API routes receive CSRF protection via X-CSRFToken header from the
     # frontend (_csrfFetch in common.js). The Alipay webhook is exempted
-    # because Alipay's servers cannot send our CSRF token. The public analysis
-    # endpoints are also exempted so that non-logged-in users can use the
-    # core detection feature without needing a server-side session match.
+    # because Alipay's servers cannot send our CSRF token. The analysis and
+    # detector submission endpoints keep their existing compatibility
+    # exemption; both blueprints still enforce login and request limits.
     _csrf_exempt_routes = [
         'payment.api_webhook_alipay',
         'analysis.api_analyze',
         'analysis.api_preview_rewrite',
         'analysis.api_suggestion_detail',
+        'detect.api_analyze',
+        'detect.api_analyze_file',
     ]
     for _route in _csrf_exempt_routes:
         _func = app.view_functions.get(_route)

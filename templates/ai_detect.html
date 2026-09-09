@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Detector - 英文文本 AI 风险识别 | Huma</title>
+    <meta name="description" content="Huma AI Detector：上传英文文档或粘贴文本，一键查看整体 AI 风险率、因素归因与逐段定位。注册每月免费 1000 词。">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://{{ request.host }}/ai-detect/">
+
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='16' fill='white' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260909-5') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='detector.css', v='20260909-9') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- ============ NAV ============ -->
+    <nav class="navbar">
+        <div class="container nav-container">
+            <a href="/" class="logo">
+                <span class="logo-monogram">
+                    <svg viewBox="0 0 38 38" fill="none">
+                        <rect x="2" y="2" width="34" height="34" rx="10" fill="url(#h-grad)"/>
+                        <rect x="10" y="9" width="4" height="20" rx="2" fill="white"/>
+                        <rect x="24" y="9" width="4" height="20" rx="2" fill="white"/>
+                        <rect x="10" y="17" width="18" height="4" rx="2" fill="white"/>
+                        <defs>
+                            <linearGradient id="h-grad" x1="0" y1="0" x2="38" y2="38">
+                                <stop offset="0%" stop-color="#4f46e5"/>
+                                <stop offset="100%" stop-color="#06b6d4"/>
+                            </linearGradient>
+                        </defs>
+                    </svg>
+                </span>
+                <span class="logo-word">Huma</span>
+            </a>
+            <button class="menu-toggle" id="menuToggle" aria-label="菜单" onclick="toggleMenu()">
+                <span class="menu-bar"></span>
+                <span class="menu-bar"></span>
+                <span class="menu-bar"></span>
+            </button>
+            <div class="nav-links">
+                <a href="/" class="nav-link">AI改写</a>
+                <span class="nav-link nav-current">AI Detector</span>
+                <a href="/faq" class="nav-link">使用帮助</a>
+                <!-- Auth-dependent elements -->
+                <a href="/orders" class="nav-link" id="orders-link" style="display:none;">个人账户</a>
+                <span class="nav-user" id="nav-user" style="display:none;"></span>
+                <span class="nav-balance" id="nav-det-quota" style="display:none;" title="AI 检测额度（每月免费 1000 词 + 充值额度）"></span>
+                <button class="btn btn-outline btn-sm" id="login-btn" onclick="showAuthModal('login')" aria-label="登录账户">登录</button>
+                <button class="btn btn-outline btn-sm" id="logout-btn" style="display:none;" onclick="logout()" aria-label="退出登录">退出</button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ============ HERO ============ -->
+    <section class="hero det-hero">
+        <div class="container">
+            <div class="hero-grid">
+                <div class="hero-content">
+                    <div class="hero-tag">✦ AI 文本风险识别</div>
+                    <div class="hero-mono det-hero-mono"><span class="gradient-text">AI Detector</span></div>
+                    <div class="hero-tagline">看清英文文本的 AI 味有多重</div>
+                    <p class="hero-subtitle">
+                        上传英文文档或粘贴文本，一键获取整体 AI 风险率、因素归因与逐段定位。
+                        注册即送每月 1000 词免费检测额度。
+                    </p>
+                    <div class="det-hero-points">
+                        <span>🔬 段落级定位</span>
+                        <span>🧭 因素归因拆解</span>
+                        <span>🎁 每月 1000 词免费</span>
+                    </div>
+                </div>
+                <div class="hero-upload" id="det-upload-area">
+                    <form id="det-form" class="upload-card">
+                        <!-- Drop Zone -->
+                        <div class="drop-zone" id="det-drop-zone">
+                            <div class="drop-icon">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                    <polyline points="17 8 12 3 7 8"/>
+                                    <line x1="12" y1="3" x2="12" y2="15"/>
+                                </svg>
+                            </div>
+                            <p class="drop-text">拖拽文档到此处，或 <span class="drop-link">点击选择文件</span></p>
+                            <p class="drop-hint">支持 .txt、.docx，最大 20MB</p>
+                            <input type="file" id="det-file-input" accept=".txt,.docx" hidden>
+                        </div>
+
+                        <div class="divider"><span>或</span></div>
+
+                        <!-- Text Paste -->
+                        <div class="text-input-area">
+                            <textarea id="det-text-input" class="text-input" placeholder="直接粘贴英文文本，检测 AI 写作特征…"></textarea>
+                        </div>
+
+                        <!-- Analyze action -->
+                        <div class="upload-actions">
+                            <button type="submit" class="btn btn-primary btn-lg btn-full" id="det-analyze-btn">🔍 开始检测</button>
+                            <p class="upload-note" id="det-free-note">按词扣减检测额度（注册送 1000 词/月，超出 ¥4.9/千词）</p>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============ LOADING ============ -->
+    <section class="section loading-section" id="det-loading" style="display:none;">
+        <div class="container">
+            <div class="loading-card">
+                <div class="spinner"><div class="spinner-ring"></div></div>
+                <h3 class="loading-title">正在检测 AI 写作特征，请稍候…</h3>
+                <p class="loading-sub">逐段计算词汇、句式、标点与上下文特征</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============ RESULT ============ -->
+    <section class="section det-result" id="det-result" style="display:none;">
+        <div class="container">
+            <div class="det-result-head">
+                <h2 class="section-heading" style="margin-bottom:4px;">检测结果</h2>
+                <p class="det-order" id="det-result-meta"></p>
+            </div>
+
+            <!-- 主分数卡：半圆罗盘 + 大数字 -->
+            <div class="det-score-card" id="det-score-card"></div>
+
+            <!-- chips：覆盖 / 段落 / 高风险 -->
+            <div class="det-chips" id="det-chips"></div>
+
+            <!-- 归因区 -->
+            <div class="attribution" id="det-attribution" hidden></div>
+
+            <!-- 段落定位 -->
+            <h3 class="det-section-title">📍 段落定位</h3>
+            <div id="det-paragraphs"></div>
+
+            <p class="det-notice">本检测模型以 Turnitin 真实评分数据为训练基准、拟合其 AI 文本判定口径，结果仅供预估参考，并非 Turnitin 官方检测，不替代学校或机构的正式判定。</p>
+        </div>
+    </section>
+
+    <!-- ============ RECHARGE MODAL (检测额度充值) ============ -->
+    <div class="modal-overlay" id="det-recharge-modal" style="display:none;">
+        <div class="modal">
+            <button class="modal-close" onclick="closeDetRechargeModal()" aria-label="关闭支付窗口">&times;</button>
+            <div class="modal-body">
+                <div class="modal-icon">🔍</div>
+                <h3 class="modal-title">充值检测额度</h3>
+                <p class="modal-desc">充值词数<b>不随月度清零</b>，按 ¥<span id="det-price-per-1000">4.9</span>/千词计费。</p>
+
+                <div class="payment-split-layout" id="det-pay-layout">
+                    <!-- 自动充值提示：仅 auto 模式显示（三行明细 + 居中按钮 + 手动档位入口） -->
+                    <div class="det-auto-box" id="det-auto-box" style="display:none;">
+                        <div class="det-auto-title">⚡ 检测额度不足</div>
+                        <div class="det-auto-bill">
+                            <div class="det-bill-row"><span>本次要检测</span><span id="det-auto-needwords">— 词</span></div>
+                            <div class="det-bill-row"><span>当前可用</span><span id="det-auto-balance">— 词</span></div>
+                            <div class="det-bill-row bill-gap"><span>还需充值</span><span id="det-auto-needpay">— 词</span></div>
+                            <div class="det-bill-row bill-total"><span>应付金额</span><span id="det-auto-price">¥0.00</span></div>
+                        </div>
+                        <button class="btn btn-primary btn-lg det-auto-submit" id="det-auto-submit-btn" onclick="submitDetRecharge()">⚡ 自动充值并继续检测</button>
+                        <p class="det-picker-toggle"><a href="#" id="det-picker-link" onclick="toggleDetPackagePicker();return false;">需要更多额度？手动选择其他档位</a></p>
+                    </div>
+                    <div class="payment-summary">
+                        <div class="payment-details">
+                            <div class="payment-row"><span>当前检测额度</span><span id="det-pay-balance">0 词</span></div>
+                            <div class="payment-row"><span>本次购买</span><span id="det-pay-words">0 词</span></div>
+                            <div class="payment-row total"><span>应付金额</span><span id="det-pay-price">¥0.00</span></div>
+                        </div>
+                        <div id="det-package-picker">
+                            <div class="recharge-options" id="det-package-options"></div>
+                        </div>
+                        <button class="btn btn-primary btn-lg btn-full" style="margin-top:14px;" id="det-recharge-submit-btn" onclick="submitDetRecharge()">💳 立即支付</button>
+                        <p class="payment-note" id="det-recharge-error" style="color:var(--danger);display:none;"></p>
+                    </div>
+                    <div id="det-qr-section" style="display:none;width:100%;">
+                        <div class="payment-qr-code">
+                            <div class="qr-code-label">使用支付宝扫码</div>
+                            <div id="det-qrcode-container" class="qr-code-box"></div>
+                            <div class="qr-code-hint">支付宝</div>
+                            <div id="det-qr-status" class="payment-qr-status"><span id="det-poll-status">⏳ 等待支付中…</span></div>
+                        </div>
+                        <div id="det-mock-section" class="mock-payment-section" style="display:none;">
+                            <button id="det-mock-pay-btn" class="btn btn-secondary mock-pay-btn">🧪 模拟支付成功（测试用）</button>
+                            <p class="mock-pay-note">仅开发测试可见</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ AUTH MODAL (与 Huma 首页同款，复用 auth.js) ============ -->
+    <div class="modal-overlay" id="auth-modal" style="display:none;">
+        <div class="modal auth-modal">
+            <button class="modal-close" onclick="closeAuthModal()" aria-label="关闭登录窗口">&times;</button>
+            <div class="modal-body">
+                <div class="modal-icon">👤</div>
+                <h3 class="modal-title">账户</h3>
+
+                <!-- Tabs -->
+                <div class="auth-tabs">
+                    <button class="auth-tab active" id="auth-tab-login" onclick="switchAuthTab('login')">登录</button>
+                    <button class="auth-tab" id="auth-tab-register" onclick="switchAuthTab('register')">注册</button>
+                </div>
+
+                <!-- Login Form -->
+                <div class="auth-form" id="auth-form-login">
+                    <input type="email" class="auth-input" id="login-email" placeholder="邮箱地址" autocomplete="email">
+                    <div class="password-wrapper">
+                        <input type="password" class="auth-input password-input" id="login-password" placeholder="密码" autocomplete="current-password">
+                        <button type="button" class="password-toggle" onclick="togglePasswordVisibility('login-password', this)" aria-label="切换密码显示" tabindex="-1">
+                            <svg class="eye-icon eye-open" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                                <line x1="1" y1="1" x2="23" y2="23"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="auth-error" id="login-error"></div>
+                    <button class="btn btn-primary btn-lg btn-full" onclick="handleLogin()">登录</button>
+                </div>
+
+                <!-- Register Form -->
+                <div class="auth-form" id="auth-form-register" style="display:none;">
+                    <input type="email" class="auth-input" id="register-email" placeholder="邮箱地址" autocomplete="email">
+                    <div class="password-wrapper">
+                        <input type="password" class="auth-input password-input" id="register-password" placeholder="密码：至少 6 位，需包含字母和数字" autocomplete="new-password">
+                        <button type="button" class="password-toggle" onclick="togglePasswordVisibility('register-password', this)" aria-label="切换密码显示" tabindex="-1">
+                            <svg class="eye-icon eye-open" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                                <line x1="1" y1="1" x2="23" y2="23"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="password-wrapper">
+                        <input type="password" class="auth-input password-input" id="register-confirm" placeholder="确认密码" autocomplete="new-password">
+                        <button type="button" class="password-toggle" onclick="togglePasswordVisibility('register-confirm', this)" aria-label="切换密码显示" tabindex="-1">
+                            <svg class="eye-icon eye-open" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/>
+                                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/>
+                                <line x1="1" y1="1" x2="23" y2="23"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="auth-error" id="register-error"></div>
+                    <div class="auth-success" id="register-success"></div>
+                    <button class="btn btn-primary btn-lg btn-full" onclick="handleRegister()">注册</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ FOOTER ============ -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-brand">
+                    <span class="logo-word" style="font-size:1.2rem;font-weight:700;">Huma</span>
+                    <p>让 AI 写作更自然 · 看清 AI 写作特征</p>
+                </div>
+                <div class="footer-links">
+                    <h5>产品</h5>
+                    <a href="/">AI改写</a>
+                    <a href="/ai-detect/">AI Detector</a>
+                    <a href="/faq">使用帮助</a>
+                </div>
+                <div class="footer-links">
+                    <h5>支持</h5>
+                    <a href="https://ipengai.cn" target="_blank">工作室主页</a>
+                    <a href="mailto:service@ipengai.cn">联系我们</a>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; <span id="copyright-year">2026</span> Huma. All rights reserved. &nbsp;|&nbsp; <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;">京ICP备2026033653号</a></p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- QR Code rendering library (with CDN fallback) -->
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"
+        onerror="console.warn('QR CDN failed to load');document.getElementById('det-qrcode-container')&&(document.getElementById('det-qrcode-container').innerHTML='<a href=\'#\' style=\'color:#4f46e5;font-size:0.85rem;\'>二维码加载失败，请刷新重试</a>');"></script>
+    <script src="{{ url_for('static', filename='common.js', v='20260909-5') }}"></script>
+    <script src="{{ url_for('static', filename='auth.js', v='20260909-5') }}"></script>
+    <script src="{{ url_for('static', filename='detector.js', v='20260909-9') }}"></script>
+<script>
+document.getElementById('copyright-year').textContent = new Date().getFullYear();
+function toggleMenu() {
+    const navLinks = document.querySelector('.nav-links');
+    const toggle = document.getElementById('menuToggle');
+    navLinks.classList.toggle('active');
+    toggle.classList.toggle('open');
+}
+document.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', () => {
+        document.querySelector('.nav-links').classList.remove('active');
+        document.getElementById('menuToggle').classList.remove('open');
+    });
+});
+</script>
+</body>
+</html>

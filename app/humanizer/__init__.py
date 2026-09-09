@@ -6,6 +6,10 @@ from app.humanizer.adapter import HumanizerAdapter
 from app.humanizer.failover import FailoverHumanizer
 from app.humanizer.llm_based import LLMBasedHumanizer
 from app.humanizer.rule_based import RuleBasedHumanizer
+try:
+    from app.humanizer.rewrite_methods import LynoteTranslationHumanizer
+except ModuleNotFoundError:  # optional experimental translation dependencies
+    LynoteTranslationHumanizer = None
 
 
 def create_humanizer(name="rule_based", fallback_name=None):
@@ -17,7 +21,12 @@ def create_humanizer(name="rule_based", fallback_name=None):
         "api": AITextHumanizer,
         "api_mock": AITextHumanizerMock,
         "llm_based": LLMBasedHumanizer,
+        "huma": AITextHumanizer,
+        "translation": LynoteTranslationHumanizer,
+        "lynote": LynoteTranslationHumanizer,
     }
+    if implementations.get(name) is None:
+        raise ValueError(f"Humanizer provider unavailable: {name}")
     try:
         primary = implementations[name]()
     except KeyError as exc:

@@ -4,6 +4,7 @@ Rewrite routes — execute text humanization and save order record.
 
 import hashlib
 import logging
+import re
 from flask import Blueprint, request, jsonify, session
 from app.extensions import limiter
 from app.helpers import generate_order_id, get_db, login_required, rewrite_and_analyze
@@ -46,6 +47,51 @@ def api_rewrite():
         return jsonify({"error": "没有可改写的文本，请先分析"}), 400
 
     word_count = len(text.split())
+    charge_words = word_count
+    from app.helpers.tasks import get_cached_original_analysis
+    import config as project_config
+    cached_analysis = get_cached_original_analysis(text)
+    session_analysis = session.get('last_analysis_summary') or {}
+    if (
+        not cached_analysis
+        and session_analysis.get('text_hash')
+        == hashlib.md5(text.encode('utf-8')).hexdigest()
+    ):
+        cached_analysis = session_analysis
+    if (
+        not cached_analysis
+        and getattr(project_config, 'REWRITE_ROUTING_POLICY', '')
+        == 'risk_band_segmented'
+    ):
+        from app.extensions import ai_detector
+        from app.helpers.tasks import cache_original_analysis
+        cached_analysis = ai_detector(text, stage='rewrite_precharge')
+        if cached_analysis.get('error_code'):
+            code = cached_analysis.get('error_code')
+            if code == 'v2_insufficient_supported_text':
+                return jsonify({
+                    "error": "当前检测器需要至少 40 个英文单词，请补充内容后重试",
+                    "error_code": code,
+                }), 400
+            return jsonify({
+                "error": "AI 检测暂时不可用，请稍后重试",
+                "error_code": code,
+            }), 503
+        cache_original_analysis(text, cached_analysis)
+    if (
+        getattr(project_config, 'REWRITE_ROUTING_POLICY', '') == 'risk_band_segmented'
+        and cached_analysis
+        and not cached_analysis.get('error_code')
+    ):
+        score = cached_analysis.get('risk_percent')
+        if score is None:
+            score = cached_analysis.get('ai_score')
+        coverage = cached_analysis.get('coverage', 1.0)
+        reject_coverage = float(
+            getattr(project_config, 'V2_REJECT_COVERAGE', 0.60)
+        )
+        if score is not None and float(score) < 20 and float(coverage) >= reject_coverage:
+            charge_words = 0
     user_id = session.get('user_id')
     order_id = generate_order_id()
     payment_status = None
@@ -54,22 +100,25 @@ def api_rewrite():
     # ── 检查词数余额，足够则扣余额改写 ──
     conn = get_db()
     balance = User.get_balance(conn, user_id)
-    if balance < word_count:
-        shortfall = word_count - balance
+    if balance < charge_words:
+        shortfall = charge_words - balance
         return jsonify({
             "error": f"余额不足（当前 {balance} 词，需 {word_count} 词），还差 {shortfall} 词",
             "balance": balance,
-            "word_count": word_count,
+            "word_count": charge_words,
             "shortfall": shortfall,
             "need_payment": True
         }), 402
 
     # 余额扣减与消费流水必须在同一事务中提交。
     try:
-        balance_remaining = User.deduct_balance(conn, user_id, word_count)
-        if balance_remaining is not None:
+        balance_remaining = (
+            User.deduct_balance(conn, user_id, charge_words)
+            if charge_words else balance
+        )
+        if balance_remaining is not None and charge_words:
             BalanceTransaction.create(
-                conn, user_id, 'rewrite_consumption', -word_count,
+                conn, user_id, 'rewrite_consumption', -charge_words,
                 balance_remaining, order_id=order_id, description='改写任务扣费'
             )
             conn.commit()
@@ -81,19 +130,19 @@ def api_rewrite():
     if balance_remaining is None:
         conn.rollback()
         balance = User.get_balance(conn, user_id)
-        shortfall = word_count - balance
+        shortfall = charge_words - balance
         return jsonify({
             "error": f"余额不足（当前 {balance} 词，需 {word_count} 词），还差 {shortfall} 词",
             "balance": balance,
-            "word_count": word_count,
+            "word_count": charge_words,
             "shortfall": shortfall,
             "need_payment": True
         }), 402
-    balance_deducted = word_count
+    balance_deducted = charge_words
     payment_status = 'balance'
-    logging.info(f"[BALANCE] User {user_id} used balance: deducted {word_count} words, remaining: {balance_remaining}")
+    logging.info(f"[BALANCE] User {user_id} used balance: deducted {charge_words} words, remaining: {balance_remaining}")
 
-    price = round(PRICE_PER_1000_WORDS * (word_count / 1000), 2)
+    price = round(PRICE_PER_1000_WORDS * (charge_words / 1000), 2)
 
     # ── 异步改写：建 processing 订单 → 后台线程改写 → 立即返回 order_id ──
     try:
@@ -121,6 +170,7 @@ def api_rewrite():
             paragraphs=paragraphs,
             source_file_key=source_file_key,
             analysis_context=analysis_context,
+            balance_words_used=charge_words,
         )
 
         # 提交后台改写线程（复用支付后改写的 do_background_rewrite，含进度写入）
@@ -269,15 +319,38 @@ def api_rewrite_preview():
         return jsonify({"error": "未能提取正文预览"}), 400
 
     try:
-        result = rewrite_and_analyze(preview_text, mode=mode)
+        # 免费预览固定走一次低成本翻译改写；完整风险路由可能依次调用
+        # translation、Huma 和定向 LLM，不适合作为 200 词获客预览。
+        # 未配置翻译器时才回退全局改写器。
+        from app.extensions import humanizer_adapter, rewrite_providers
+        preview_humanizer = (
+            rewrite_providers.get('translation') or humanizer_adapter
+        )
+        result = rewrite_and_analyze(
+            preview_text,
+            mode=mode,
+            routing_policy_override='legacy_whole_document',
+            humanizer_override=preview_humanizer,
+        )
     except Exception:
         logging.exception("Preview rewrite failed")
         return jsonify({"error": "预览改写失败，请稍后重试"}), 500
 
     original_analysis = result.get('original_analysis') or {}
     rewritten_analysis = result.get('rewritten_analysis') or {}
-    original_score = original_analysis.get('ai_score', 0) or 0
-    rewritten_score = rewritten_analysis.get('ai_score', 0) or 0
+    original_score = original_analysis.get('ai_score')
+    if original_score is None:
+        original_score = original_analysis.get('risk_percent', 0)
+    rewritten_score = rewritten_analysis.get('ai_score')
+    if rewritten_score is None:
+        rewritten_score = rewritten_analysis.get('risk_percent', 0)
+
+    humanized_preview = (result.get('humanized') or '').strip()
+    if not humanized_preview:
+        return jsonify({"error": "预览改写未返回有效内容，请稍后重试"}), 502
+    if re.sub(r'\s+', ' ', humanized_preview) == re.sub(r'\s+', ' ', preview_text):
+        logging.error("Preview humanizer returned unchanged text")
+        return jsonify({"error": "预览改写未产生有效变化，请稍后重试"}), 502
 
     response_data = {
         "success": True,
@@ -290,7 +363,7 @@ def api_rewrite_preview():
             "risk_level": derive_risk_level(original_score),
         },
         "rewritten": {
-            "text": result.get('humanized', ''),
+            "text": humanized_preview,
             "ai_score": round(rewritten_score, 1),
             "risk_level": derive_risk_level(rewritten_score),
         },

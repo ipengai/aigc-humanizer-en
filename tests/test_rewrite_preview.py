@@ -123,7 +123,10 @@ class RewritePreviewRouteTests(unittest.TestCase):
         with mock.patch(
             'app.helpers.tasks.rewrite_and_analyze',
             return_value=self._result(),
-        ) as rewrite:
+        ) as rewrite, mock.patch(
+            'app.extensions.rewrite_providers',
+            {'translation': 'preview-translation-provider'},
+        ):
             response = self.client.post(
                 '/api/rewrite-preview',
                 json={'text': 'attacker supplied chunk', 'mode': 'high'},
@@ -135,6 +138,14 @@ class RewritePreviewRouteTests(unittest.TestCase):
         self.assertIn('This analyzed paragraph', rewritten_text)
         self.assertNotIn('attacker supplied chunk', rewritten_text)
         self.assertEqual(rewrite.call_args.kwargs['mode'], 'high')
+        self.assertEqual(
+            rewrite.call_args.kwargs['routing_policy_override'],
+            'legacy_whole_document',
+        )
+        self.assertEqual(
+            rewrite.call_args.kwargs['humanizer_override'],
+            'preview-translation-provider',
+        )
 
     def test_same_document_and_mode_reuses_cached_preview(self):
         analyzed = (
@@ -164,6 +175,28 @@ class RewritePreviewRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn('请先上传', response.get_json()['error'])
+
+    def test_preview_rejects_unchanged_humanizer_output(self):
+        analyzed = (
+            'This analyzed paragraph contains enough words to qualify as body '
+            'content and must be changed by the preview humanizer.'
+        )
+        self._login_with_text(analyzed)
+        unchanged = {
+            'humanized': analyzed,
+            'original_analysis': {'ai_score': 56.6},
+            'rewritten_analysis': {'ai_score': 56.6},
+        }
+
+        with mock.patch(
+            'app.helpers.tasks.rewrite_and_analyze', return_value=unchanged,
+        ):
+            response = self.client.post(
+                '/api/rewrite-preview', json={'mode': 'median'},
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn('未产生有效变化', response.get_json()['error'])
 
 
 if __name__ == '__main__':

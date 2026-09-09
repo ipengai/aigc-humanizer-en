@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-from copy import deepcopy
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -18,6 +17,16 @@ def _safe_file_path(folder, file_key):
 def _replace_paragraph_text(paragraph_element, rewritten_text):
     """Redistribute text across existing runs while preserving run properties."""
     from docx.oxml.ns import qn
+
+    # Tabs and explicit line breaks belong to the old text layout. Leaving them
+    # in place after redistributing new text can split a word in the middle
+    # (for example ``do\tminate``). Rewritten paragraphs are plain text, so
+    # remove those stale inline controls before assigning the new characters.
+    for tag in ('w:tab', 'w:br', 'w:cr'):
+        for node in list(paragraph_element.iter(qn(tag))):
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
 
     text_nodes = list(paragraph_element.iter(qn('w:t')))
     if not text_nodes:
@@ -44,7 +53,7 @@ def _replace_paragraph_text(paragraph_element, rewritten_text):
 
 
 def _replace_paragraph_range(body_children, body_indexes, rewritten_text):
-    """Replace plain source paragraphs with any number of output paragraphs."""
+    """Replace source paragraphs without changing the document structure."""
     source_elements = []
     for body_index in body_indexes:
         if body_index < 0 or body_index >= len(body_children):
@@ -59,20 +68,13 @@ def _replace_paragraph_range(body_children, body_indexes, rewritten_text):
     output_paragraphs = [
         value.strip() for value in rewritten_text.split('\n\n') if value.strip()
     ] or ['']
-    shared = min(len(source_elements), len(output_paragraphs))
-    for index in range(shared):
+    if len(output_paragraphs) != len(source_elements):
+        raise ValueError(
+            'DOCX paragraph mapping mismatch: '
+            f'source={len(source_elements)} output={len(output_paragraphs)}'
+        )
+    for index in range(len(source_elements)):
         _replace_paragraph_text(source_elements[index], output_paragraphs[index])
-
-    parent = source_elements[0].getparent()
-    for element in source_elements[len(output_paragraphs):]:
-        parent.remove(element)
-
-    anchor = source_elements[min(len(source_elements), len(output_paragraphs)) - 1]
-    for text in output_paragraphs[len(source_elements):]:
-        clone = deepcopy(source_elements[-1])
-        _replace_paragraph_text(clone, text)
-        anchor.addnext(clone)
-        anchor = clone
     return len(output_paragraphs)
 
 

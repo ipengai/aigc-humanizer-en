@@ -345,7 +345,9 @@ function scrollToResults() {
 
 /* ========== LOADING ========== */
 // 改写流程步骤定义（与 index.html #loading-steps 的 data-step 对应）
-const LOADING_STEPS = ['parse', 'detect', 'rewrite', 'detect_again'];
+const LOADING_STEPS = ['parse', 'detect', 'rewrite', 'detect_again', 'targeted_rewrite'];
+// 定向二改是条件步骤，只能由后端真实进度触发，不能由等待动画模拟。
+const AUTO_LOADING_STEPS = ['parse', 'detect', 'rewrite', 'detect_again'];
 // 每个步骤在等待期间的展示时长（ms）——用于在没有后端进度推送时按节奏推进
 const LOADING_STEP_DURATION = 2000;
 let _loadingStepsTimer = null;
@@ -374,12 +376,15 @@ function resetLoadingSteps() {
             li.classList.remove('active', 'done');
         });
     }
+    const title = document.getElementById('loading-title');
+    if (title) title.textContent = '正在处理，请稍候...';
     setLoadingStep(LOADING_STEPS[0]);
 }
 
 /**
  * 启动按节奏自动推进步骤的定时器（无后端推送时的兜底方案）。
- * 依次高亮 parse → detect → rewrite → detect_again，最后一步停留直到请求返回。
+ * 依次高亮 parse → detect → rewrite → detect_again。
+ * targeted_rewrite 仅在后端确认进入二次改写后显示。
  * 返回一个 stop 清理函数；hideLoading 或请求返回时调用。
  */
 function startLoadingSteps() {
@@ -388,8 +393,8 @@ function startLoadingSteps() {
     resetLoadingSteps();
     _loadingStepsTimer = setInterval(() => {
         idx += 1;
-        if (idx < LOADING_STEPS.length) {
-            setLoadingStep(LOADING_STEPS[idx]);
+        if (idx < AUTO_LOADING_STEPS.length) {
+            setLoadingStep(AUTO_LOADING_STEPS[idx]);
         }
         // 到最后一站（detect_again）后不再推进，保持该步骤高亮
     }, LOADING_STEP_DURATION);
@@ -405,7 +410,7 @@ function stopLoadingSteps() {
 
 /**
  * 标记某个步骤的状态。
- * @param {string} step - 步骤标识：parse | detect | rewrite | detect_again
+ * @param {string} step - 步骤标识：parse | detect | rewrite | detect_again | targeted_rewrite
  * @param {string} [status] - active（进行中，默认）| done（已完成）
  */
 function setLoadingStep(step, status = 'active') {

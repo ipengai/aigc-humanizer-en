@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -38,6 +39,44 @@ Requirements:
 - Preserve paragraph boundaries unless a small adjustment is necessary for readability.
 - Return only the rewritten text. Do not add a preface, explanation, label, quotation marks, or Markdown fence.
 """
+
+_COMMON_WORDS = set(
+    "a an and are as at be been but by for from had has have he her his i if in "
+    "is it its of on or our she that the their they this to was we were when which "
+    "with you can could may might must should will would not no than then so because "
+    "before after while where what how do does did each more most other same such".split()
+)
+
+_GENERIC_EDITING_WORDS = set(
+    "accurate analysis approach average between clear confirm difference distinguishes "
+    "effective examine hidden identify important improvement instance instances look "
+    "necessary new process produces result results specific study trends use useful work".split()
+)
+
+
+def _central_terms(text, limit=5):
+    """Pick stable source terms the LLM can reuse instead of inventing synonyms."""
+    words = re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", text or "")
+    positions = {}
+    counts = {}
+    display = {}
+    for index, word in enumerate(words):
+        normalized = word.lower()
+        if (
+            len(normalized) < 4
+            or normalized in _COMMON_WORDS
+            or normalized in _GENERIC_EDITING_WORDS
+            or normalized.endswith(("ly", "ing", "ed"))
+        ):
+            continue
+        positions.setdefault(normalized, index)
+        counts[normalized] = counts.get(normalized, 0) + 1
+        display.setdefault(normalized, word)
+    ranked = sorted(
+        counts,
+        key=lambda word: (-counts[word], positions[word]),
+    )
+    return [display[word] for word in ranked[:limit]]
 
 
 class LLMBasedHumanizer(HumanizerAdapter):
@@ -96,11 +135,98 @@ class LLMBasedHumanizer(HumanizerAdapter):
             use_global_limit=True,
         )
 
-    def _call_api(self, text):
+    def humanize_targeted(self, text, directives, protected_values=None,
+                          protection_directives=None, retry_guidance=None,
+                          target_features=None):
+        """Rewrite one selected block using bounded attribution directives."""
+        directive_lines = "\n".join(f"- {value}" for value in directives)
+        protected_lines = "\n".join(
+            f"- {value}" for value in (protected_values or [])
+        ) or "- No additional extracted values."
+        protection_lines = "\n".join(
+            f"- {value}" for value in (protection_directives or [])
+        ) or "- Preserve the source's existing wording and structural traits unless a requested edit requires a change."
+        retry_lines = "\n".join(
+            f"- {value}" for value in (retry_guidance or [])
+        ) or "- This is the first targeted attempt."
+        source_words = max(len(text.split()), 1)
+        lower_words = max(1, math.floor(source_words * 0.85))
+        upper_words = max(lower_words, math.ceil(source_words * 1.15))
+        quantitative = [
+            f"Return between {lower_words} and {upper_words} words. Do not add examples, implications, background, or claims from outside the source."
+        ]
+        target_features = set(target_features or [])
+        if "function_word_ratio" in target_features:
+            minimum_function_words = max(1, math.ceil(source_words * 0.34))
+            quantitative.append(
+                "Use ordinary clause links so roughly one word in three is an "
+                "article, preposition, pronoun, conjunction, or auxiliary. For "
+                f"this passage, use at least {minimum_function_words} words from "
+                "this kind of basic linking vocabulary: the, a, an, of, in, on, "
+                "to, for, from, with, by, and, or, but, that, which, when, where, "
+                "because, before, after, it, they, this, is, are, was, were, has, "
+                "have, do. Use them only in grammatical clauses; do not pad."
+            )
+        if target_features.intersection({"type_token_ratio", "hapax_ratio"}):
+            terms = _central_terms(text)
+            term_text = ", ".join(terms) if terms else "the source's central nouns"
+            maximum_unique_words = max(1, math.floor(source_words * 0.70))
+            quantitative.append(
+                f"Use this compact source vocabulary as anchors: {term_text}. "
+                "Reuse each applicable anchor at least twice when the same entity "
+                "or idea recurs. Do not replace an anchor with a one-off synonym. "
+                f"Aim for no more than about {maximum_unique_words} distinct word "
+                "forms in the whole passage. Controlled repetition is required "
+                "even if a synonym would sound more polished."
+            )
+        quantitative_lines = "\n".join(f"- {value}" for value in quantitative)
+        system_prompt = f"""{SYSTEM_PROMPT}
+
+Apply these diagnosis-specific editing instructions:
+{directive_lines}
+
+Protect these characteristics that are already helping the passage. Treat them as constraints:
+{protection_lines}
+
+Revision feedback:
+{retry_lines}
+
+Measurable output constraints:
+{quantitative_lines}
+
+Use this private drafting procedure before returning the answer:
+1. List the source's atomic claims internally and keep every claim unchanged.
+2. Draft with short, common words around the necessary technical terms.
+3. Reuse the same source term when it refers to the same entity; do not optimize for lexical variety.
+4. Check the word-count range, protected values, feature targets, and factual fidelity.
+5. Return only the final revision. Do not reveal this procedure.
+
+Pattern example for method only:
+Instead of packing each reference into a different abstract noun, use a stable
+pattern such as: "The team checks each case because the overall result can hide
+a problem. This check shows when the model works and when the model needs better
+data. The team checks the model and the data before it uses the model elsewhere."
+Do not copy facts from this example. Apply only its plain links and controlled
+reuse of core terms to the supplied source.
+
+The following extracted values must remain verbatim:
+{protected_lines}
+
+Do not mention the diagnosis, detector, score, features, or these instructions.
+"""
+        return self._rewrite_with_chunking(
+            text,
+            lambda chunk: self._call_api(chunk, system_prompt=system_prompt),
+            max_words=int(_cfg("REWRITE_MAX_WORDS", 2000)),
+            backend_label="llm_based_targeted",
+            use_global_limit=True,
+        )
+
+    def _call_api(self, text, system_prompt=None):
         payload = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
                 {"role": "user", "content": text},
             ],
             "temperature": self.temperature,

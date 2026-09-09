@@ -8,7 +8,10 @@ import threading
 
 from abc import ABC, abstractmethod
 
-from app.helpers.segmenter import segment as segment_paragraphs
+from app.helpers.segmenter import (
+    segment as segment_paragraphs,
+    _is_heading,
+)
 from app.humanizer.events import REWRITE_FALLBACK_EVENT
 
 logger = logging.getLogger("app.humanizer")
@@ -184,17 +187,35 @@ class HumanizerAdapter(ABC):
                 整批结果并按逻辑块恢复主备处理。
         """
         _start = time.time()
+        # P1 提速：median/high 档默认启用跨标题/跨表格聚合（low 档保持
+        # 逐段硬边界）。REWRITE_CROSS_BOUNDARIES=False 可整体回滚。
+        max_words_cfg = int(_cfg('REWRITE_MAX_WORDS', 2000))
+        cross_boundaries = bool(
+            _cfg('REWRITE_CROSS_BOUNDARIES', True)
+        ) and mode in ('median', 'high')
+        block_target_words = None
+        if cross_boundaries:
+            if mode == 'median':
+                block_target_words = int(
+                    _cfg('REWRITE_MEDIAN_TARGET_WORDS', 1500)
+                )
+            else:  # high：默认顶满单次请求硬顶（2000），可单独调
+                block_target_words = int(
+                    _cfg('REWRITE_HIGH_TARGET_WORDS', max_words_cfg)
+                )
         tasks = segment_paragraphs(
             paragraphs,
             mode=mode,
             median_paras=_cfg('REWRITE_MEDIAN_PARAS', 3),
             high_paras=_cfg('REWRITE_HIGH_PARAS', 5),
-            max_words=_cfg('REWRITE_MAX_WORDS', 2000),
+            max_words=max_words_cfg,
             min_chars=_cfg('REWRITE_MIN_CHARS', 300),
             protect_short_paragraphs=_cfg(
                 'REWRITE_PROTECT_SHORT_PARAGRAPHS', False
             ),
             protect_short_lists=_cfg('REWRITE_PROTECT_SHORT_LISTS', False),
+            cross_boundaries=cross_boundaries,
+            block_target_words=block_target_words,
         )
 
         parts = []
@@ -203,7 +224,7 @@ class HumanizerAdapter(ABC):
         if rewrite_tasks:
             logger.info(
                 "rewrite stage=rewrite backend=%s action=segment mode=%s blocks=%d protected=%d",
-                _cfg('HUMANIZER_ADAPTER', 'rule_based'), mode,
+                primary_label or _cfg('HUMANIZER_ADAPTER', 'rule_based'), mode,
                 len(rewrite_tasks), len(tasks) - len(rewrite_tasks),
             )
 
@@ -355,24 +376,161 @@ class HumanizerAdapter(ABC):
             if rate_limit_enabled and group_index < len(request_groups) - 1:
                 time.sleep(rate_limit_sleep)
 
+        def _emit_rewrite_task(task):
+            """改写块结果写入 parts / structured。
+
+            cross 模式下改写块可能夹带标题"受保护行"：输出段数与源段数
+            一致时按位把标题位置强制还原为源标题文本；不一致（LLM 合并或
+            拆分段落）时无法安全回填 Word，降级为逐段改写，标题绝不改动。
+            """
+            rewritten = rewritten_by_task_id[task["task_id"]]
+            source_paragraphs = task.get("paragraphs") or []
+            source_format = (
+                source_paragraphs[0].get("source_format")
+                if source_paragraphs else None
+            )
+            out_segments = _split_blank_line_paragraphs(rewritten)
+
+            def append_aligned(para, text, was_rewritten):
+                style = para.get("style")
+                level = para.get("heading_level")
+                if level is None:
+                    level = _heading_level_from_style(style)
+                item = dict(para)
+                item.update({
+                    "text": text.strip(),
+                    "word_count": len(text.split()),
+                    "was_rewritten": was_rewritten,
+                    "is_heading": bool(
+                        level is not None or para.get("is_heading", False)
+                    ),
+                    "heading_level": level,
+                    "style": style,
+                })
+                if para.get("body_index") is not None:
+                    item["source_body_indexes"] = [para["body_index"]]
+                structured.append(item)
+
+            # DOCX must retain a one-to-one paragraph map. Besides making the
+            # renderer safe, paragraph-level structured items let a later Huma
+            # upgrade re-segment the translated text without losing body_index
+            # or accidentally treating headings as body text.
+            if source_format == "docx":
+                if len(out_segments) != len(source_paragraphs):
+                    logger.warning(
+                        "rewrite action=docx_structure_fallback blocks=1 "
+                        "expected=%d actual=%d",
+                        len(source_paragraphs), len(out_segments),
+                    )
+                    for para in source_paragraphs:
+                        original = (para.get("text") or "").strip()
+                        if not original:
+                            continue
+                        if _is_heading(para):
+                            parts.append(original)
+                            append_aligned(para, original, False)
+                            continue
+                        single_task = {
+                            "text": original,
+                            "paragraphs": [para],
+                            "task_id": task.get("task_id"),
+                        }
+                        sub_out = rewrite_one(single_task, None)
+                        # A provider may expand one Word paragraph into several
+                        # blank-line paragraphs. Keep them inside the same Word
+                        # paragraph rather than changing document structure.
+                        normalized = " ".join(
+                            _split_blank_line_paragraphs(sub_out)
+                        ).strip()
+                        parts.append(normalized)
+                        append_aligned(para, normalized, True)
+                    return
+
+                restored = []
+                for para, segment in zip(source_paragraphs, out_segments):
+                    if _is_heading(para):
+                        value = (para.get("text") or "").strip()
+                        restored.append(value)
+                        append_aligned(para, value, False)
+                    else:
+                        restored.append(segment)
+                        append_aligned(para, segment, True)
+                parts.append("\n\n".join(restored))
+                return
+
+            if task.get("contains_headings"):
+                if len(out_segments) == len(source_paragraphs):
+                    restored = []
+                    for para, seg in zip(source_paragraphs, out_segments):
+                        if _is_heading(para):
+                            restored.append((para.get("text") or "").strip())
+                        else:
+                            restored.append(seg)
+                    rewritten = "\n\n".join(restored)
+                else:
+                    logger.warning(
+                        "rewrite action=heading_restore_fallback blocks=1 "
+                        "expected=%d actual=%d",
+                        len(source_paragraphs), len(out_segments),
+                    )
+                    # Preserve the established non-DOCX fallback behavior:
+                    # titles remain hard boundaries and body text is retried
+                    # in median-sized groups.
+                    for subtask in segment_paragraphs(
+                        source_paragraphs, mode="median",
+                        cross_boundaries=False,
+                        protect_short_paragraphs=False,
+                        protect_short_lists=False,
+                    ):
+                        if subtask["type"] == "rewrite":
+                            sub_out = rewrite_one(subtask, None)
+                            parts.append(sub_out)
+                            sub_sources = subtask.get("paragraphs") or []
+                            sub_item = {
+                                "text": sub_out.strip(),
+                                "was_rewritten": True,
+                                "is_heading": False,
+                                "heading_level": None,
+                                "style": None,
+                                "block_id": subtask.get("block_id"),
+                                "source_node_ids": subtask.get(
+                                    "source_node_ids", []
+                                ),
+                                "source_body_indexes": subtask.get(
+                                    "source_body_indexes", []
+                                ),
+                            }
+                            if sub_sources:
+                                sub_item["source_format"] = sub_sources[0].get(
+                                    "source_format"
+                                )
+                            structured.append(sub_item)
+                        else:
+                            for para in subtask.get("paragraphs") or []:
+                                value = (para.get("text") or "").strip()
+                                if not value or "table" in para:
+                                    continue
+                                parts.append(value)
+                                append_aligned(para, value, False)
+                    return
+            parts.append(rewritten)
+            item = {
+                "text": rewritten.strip(),
+                "was_rewritten": True,
+                "is_heading": False,
+                "heading_level": None,
+                "style": None,
+                "block_id": task.get("block_id"),
+                "source_node_ids": task.get("source_node_ids", []),
+                "source_body_indexes": task.get("source_body_indexes", []),
+            }
+            if source_paragraphs:
+                item["source_format"] = source_paragraphs[0].get("source_format")
+            structured.append(item)
+
         for task in tasks:
             if task["type"] == "rewrite":
-                rewritten = rewritten_by_task_id[task["task_id"]]
-                source_paragraphs = task.get("paragraphs") or []
-                parts.append(rewritten)
-                item = {
-                    "text": rewritten.strip(),
-                    "was_rewritten": True,
-                    "is_heading": False,
-                    "heading_level": None,
-                    "style": None,
-                    "block_id": task.get("block_id"),
-                    "source_node_ids": task.get("source_node_ids", []),
-                    "source_body_indexes": task.get("source_body_indexes", []),
-                }
-                if source_paragraphs:
-                    item["source_format"] = source_paragraphs[0].get("source_format")
-                structured.append(item)
+                _emit_rewrite_task(task)
             elif task["type"] == "layout":
                 # Non-text PDF/DOCX structure must survive the rewrite round
                 # trip in its original position. It contributes no detector or
@@ -411,7 +569,7 @@ class HumanizerAdapter(ABC):
 
         logger.info(
             "rewrite stage=rewrite backend=%s action=all_done blocks=%d protected=%d elapsed=%.0fms",
-            _cfg('HUMANIZER_ADAPTER', 'rule_based'), len(rewrite_tasks),
+            primary_label or _cfg('HUMANIZER_ADAPTER', 'rule_based'), len(rewrite_tasks),
             len(tasks) - len(rewrite_tasks), (time.time() - _start) * 1000,
         )
         return "\n\n".join(parts), structured

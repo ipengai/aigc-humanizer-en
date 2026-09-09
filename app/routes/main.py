@@ -68,6 +68,7 @@ def sitemap_xml():
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     pages = [
         {'loc': site_url + '/', 'lastmod': today, 'changefreq': 'weekly', 'priority': '1.0'},
+        {'loc': site_url + '/ai-detect/', 'lastmod': today, 'changefreq': 'weekly', 'priority': '0.8'},
         {'loc': site_url + '/faq', 'lastmod': today, 'changefreq': 'weekly', 'priority': '0.5'},
         {'loc': site_url + '/orders', 'lastmod': today, 'changefreq': 'weekly', 'priority': '0.3'},
     ]

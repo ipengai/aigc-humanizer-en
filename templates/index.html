@@ -24,7 +24,7 @@
 
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-family='Inter,sans-serif' font-weight='800' font-size='18' fill='white' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260901-2') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css', v='20260909-11') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <!-- Baidu Tongji -->
@@ -65,9 +65,10 @@
                 <span class="menu-bar"></span>
             </button>
             <div class="nav-links">
-                <a href="#features" class="nav-link">介绍</a>
+                <a href="/" class="nav-link">AI改写</a>
                 <a href="#pricing" class="nav-link">定价</a>
                 <a href="/faq" class="nav-link">使用帮助</a>
+                <a href="/ai-detect/" class="nav-link">AI Detector</a>
                 <!-- Auth-dependent elements -->
                 <a href="/orders" class="nav-link" id="orders-link" style="display:none;">个人账户</a>
                 <span class="nav-user" id="nav-user" style="display:none;"></span>
@@ -91,7 +92,6 @@
                     <p class="hero-subtitle">
                         上传英文文件或粘贴文字，一键改写。支持标准、快速、精细三种不同模式。
                     </p>
-                    <div class="hero-expectation">⚠️ 受输入内容不同影响，暂不承诺达到固定 AI 率目标，您可以先用免费额度试用。</div>
                 </div>
                 <div class="hero-upload" id="upload-area">
                     <form id="upload-form" class="upload-card">
@@ -145,7 +145,8 @@
                 <div class="spinner">
                     <div class="spinner-ring"></div>
                 </div>
-                <h3 class="loading-title">正在处理，请稍候...</h3>
+                <h3 class="loading-title" id="loading-title">正在处理，请稍候...</h3>
+                <p class="loading-sub" id="loading-sub" style="display:none;"></p>
                 <ul class="loading-steps" id="loading-steps">
                     <li class="loading-step" data-step="parse">
                         <span class="step-dot"></span>
@@ -162,6 +163,10 @@
                     <li class="loading-step" data-step="detect_again">
                         <span class="step-dot"></span>
                         <span class="step-label">改写后检测</span>
+                    </li>
+                    <li class="loading-step" data-step="targeted_rewrite">
+                        <span class="step-dot"></span>
+                        <span class="step-label">高风险内容定向优化</span>
                     </li>
                 </ul>
             </div>
@@ -204,7 +209,6 @@
                         </div>
                         <div class="recharge-options" id="recharge-options"></div>
                         <p class="payment-note">💡 充值到账后将自动扣除本次用量并开始改写</p>
-                        <p class="payment-expectation">效果受原文及检测平台影响，暂不承诺固定 AI 率；建议先用免费额度测试。</p>
                     </div>
 
                     <!-- Right column: QR code -->
@@ -373,6 +377,7 @@
             </div>
             <div class="preview-unlock">
                 <p class="preview-lock-text">🔒 剩余 <strong id="preview-remaining">0</strong> 词已锁定，解锁全文即可查看完整改写</p>
+                <p class="preview-balance-info" id="preview-balance-info" style="font-size:13px;color:#666;margin:10px 0 6px"></p>
                 <button class="btn btn-primary btn-lg" id="unlock-full-btn" onclick="unlockFullRewrite()" disabled>🔓 解锁全文改写</button>
                 <p class="preview-note">全文改写消耗词数额度（注册已送 200 词，超出按 ¥{{ price_per_1000_words }}/千词计费）</p>
             </div>
@@ -494,7 +499,6 @@
                         <li>✓ 修改建议生成</li>
                         <li>✓ 全文自动降 AI 改写</li>
                         <li>✓ 以常见检测场景低于 20% 为优化目标</li>
-                        <li class="pricing-disclaimer">结果因原文与检测平台而异，暂不承诺固定 AI 率</li>
                     </ul>
                     <button class="btn btn-primary btn-full" onclick="scrollToUpload()">立即使用</button>
                 </div>
@@ -525,7 +529,7 @@
                 </div>
                 <div class="footer-links">
                     <h5>产品</h5>
-                    <a href="#features">介绍</a>
+                    <a href="/">AI改写</a>
                     <a href="#pricing">定价</a>
                     <a href="/faq">使用帮助</a>
                 </div>
@@ -544,10 +548,10 @@
     <!-- QR Code rendering library (with CDN fallback) -->
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"
         onerror="console.warn('QR CDN failed to load');document.getElementById('qrcode-container')&&(document.getElementById('qrcode-container').innerHTML='<a href=\'#\' style=\'color:#4f46e5;font-size:0.85rem;\'>二维码加载失败，请刷新重试</a>');"></script>
-    <script src="{{ url_for('static', filename='common.js', v='20260824-1') }}"></script>
-    <script src="{{ url_for('static', filename='auth.js') }}"></script>
-    <script src="{{ url_for('static', filename='payment.js', v='20260831-2') }}"></script>
-    <script src="{{ url_for('static', filename='main.js', v='20260902-2') }}"></script>
+ <script src="{{ url_for('static', filename='common.js', v='20260909-11') }}"></script>
+    <script src="{{ url_for('static', filename='auth.js', v='20260909-12') }}"></script>
+<script src="{{ url_for('static', filename='payment.js', v='20260909-12') }}"></script>
+    <script src="{{ url_for('static', filename='main.js', v='20260909-12') }}"></script>
 <script>
 // Dynamic copyright year
 document.getElementById('copyright-year').textContent = new Date().getFullYear();

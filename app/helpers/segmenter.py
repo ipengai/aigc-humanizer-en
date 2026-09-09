@@ -32,6 +32,21 @@ def _is_layout_node(para):
     )
 
 
+def _is_heading(para):
+    """Whether a paragraph carries real heading semantics (style or flag)."""
+    if not para:
+        return False
+    if para.get("is_heading"):
+        return True
+    level = para.get("heading_level")
+    if level is not None and level != "":
+        return True
+    style = (para.get("style") or "").lower()
+    return bool(
+        (style and "heading" in style) or style in ("title", "subtitle")
+    )
+
+
 def _looks_like_title(text, words):
     """启发式判断一个 Normal 段是否像标题（无样式时的兜底）。"""
     if words > 15:
@@ -132,7 +147,8 @@ def segment(paragraphs, mode="low", min_words=10,
             median_paras=DEFAULT_MEDIAN_PARAS, high_paras=DEFAULT_HIGH_PARAS,
             max_words=DEFAULT_MAX_WORDS, min_chars=DEFAULT_MIN_CHARS,
             protect_short_paragraphs=False,
-            protect_short_lists=False):
+            protect_short_lists=False,
+            cross_boundaries=False, block_target_words=None):
     """按 mode 把有序段落切分为"改写任务"。
 
     mode 枚举：
@@ -141,14 +157,23 @@ def segment(paragraphs, mode="low", min_words=10,
         high  = 连续正文段聚合（默认最多 5 段 / 总字数<max_words）
 
     聚合规则（median/high 共用，仅可聚合段落数不同）：
-        - 标题 / 参考文献等真实结构是硬边界，不聚合进 part，原样保留
+        - 标题 / 参考文献等真实结构默认是硬边界，不聚合进 part，原样保留
         - 短正文默认参与聚合；仅无标题格式文档且开关启用时才保护
         - 未保护的短列表强制黏到上一正文块，不受段数上限影响
-        - 表格暂时跳过，不送审，也不打断表格前后的正文聚合
+        - 表格默认跳过，不送审，也不打断表格前后的正文聚合
         - max_paras 是软上限：达到后仅当块字符数已达到 min_chars 才切块
         - max_words 是硬上限：达到后必须开启新的 part
         - 连续正文末尾不足 min_chars 时，尽量向前合并到上一改写块
         - 当 max_paras == 1 时，等价于 low（每段独立一次请求）
+
+    cross_boundaries=True（P1 提速档）时聚合规则变为：
+        - 标题不再作硬边界：作为"受保护行"随正文一起进入改写块（改写后
+          按段位强制还原为原标题文本，由 adapter 层保证）；参考文献、
+          代码块、题注等仍为硬边界
+        - 表格/纯图占位（docx 源）直接跳过：不 flush、不占位、不进文本，
+          前后正文可同块（docx 回填只替换段落节点，表格节点原位不动）
+        - 忽略段数软上限，仅按 block_target_words（缺省取 max_words）
+          切块 —— 供 median/high 档以目标词量表达差异
 
     Args:
         median_paras: median 模式最多聚合的连续正文段数（可配置）。
@@ -157,6 +182,8 @@ def segment(paragraphs, mode="low", min_words=10,
         min_chars:    单次请求期望的最小字符数；不足时允许超过段数软上限。
         protect_short_paragraphs: 是否在无标题格式文档中保护短正文。
         protect_short_lists: 是否保护短列表；False 时短列表黏到上一正文块。
+        cross_boundaries: 是否启用跨标题/跨表格聚合（见上）。
+        block_target_words: 跨边界模式的目标块词数（None 时用 max_words）。
 
     Returns:
         list[dict]: 每个元素：
@@ -189,11 +216,22 @@ def segment(paragraphs, mode="low", min_words=10,
 
     # 2) median/high：先逐段打标记，再在连续正文之间按 N 段聚合
     max_paras = high_paras if mode == "high" else median_paras
-    if max_paras <= 1:
+    # docx 源中无文本的表格/图片占位才可安全跳过（回填只替换段落节点）；
+    # 其它来源（如 PDF 重建占位）保持旧行为，避免破坏格式重建。
+    source_format = (
+        paragraphs[0].get("source_format") if paragraphs else None
+    )
+    layout_skip = bool(
+        cross_boundaries and source_format == "docx"
+    )
+    if max_paras <= 1 and not cross_boundaries:
         tasks = _segment_paragraph(paragraphs, guard)
     else:
         tasks = _segment_aggregate(
-            paragraphs, guard, max_paras, max_words, min_chars
+            paragraphs, guard, max_paras, max_words, min_chars,
+            cross_boundaries=cross_boundaries,
+            block_target_words=block_target_words,
+            layout_skip=layout_skip,
         )
     return _finalize_tasks(tasks)
 
@@ -204,13 +242,25 @@ def _finalize_tasks(tasks):
     for task_index, task in enumerate(tasks):
         source_nodes = task.get("paragraphs") or []
         task["task_id"] = f"segment-{task_index:04d}"
-        task["source_node_ids"] = [
-            node["node_id"] for node in source_nodes if node.get("node_id")
-        ]
-        task["source_body_indexes"] = [
-            node["body_index"] for node in source_nodes
-            if node.get("body_index") is not None
-        ]
+        node_ids = []
+        body_indexes = []
+        for node in source_nodes:
+            nested_node_ids = node.get("source_node_ids") or []
+            if node.get("node_id"):
+                nested_node_ids = [node["node_id"]]
+            for node_id in nested_node_ids:
+                if node_id not in node_ids:
+                    node_ids.append(node_id)
+
+            nested_body_indexes = node.get("source_body_indexes") or []
+            if node.get("body_index") is not None:
+                nested_body_indexes = [node["body_index"]]
+            for body_index in nested_body_indexes:
+                if body_index not in body_indexes:
+                    body_indexes.append(body_index)
+
+        task["source_node_ids"] = node_ids
+        task["source_body_indexes"] = body_indexes
         if task["type"] == "rewrite":
             task["block_id"] = f"rewrite-block-{rewrite_index:04d}"
             rewrite_index += 1
@@ -241,24 +291,36 @@ def _count_words(para):
     return para.get("word_count", len((para.get("text") or "").split()))
 
 
-def _segment_aggregate(paragraphs, guard, max_paras, max_words, min_chars):
+def _segment_aggregate(paragraphs, guard, max_paras, max_words, min_chars,
+                       cross_boundaries=False, block_target_words=None,
+                       layout_skip=False):
     """连续正文段按 max_paras 段 + max_words 字聚合为一个 rewrite part。
 
-    硬边界（标题/参考文献等真实结构）作为分割点，不聚合进 part。
-    未保护的短列表视为上一段的附属内容，不触发 max_paras 分块。
-    max_paras 是软上限；当前块不足 min_chars 时继续聚合后续正文。
-    连续正文的尾块不足 min_chars 时，在不突破 max_words 的前提下向前合并。
-    表格节点暂时忽略，前后正文仍可进入同一个聚合块。
+    默认（cross_boundaries=False）：
+        硬边界（标题/参考文献等真实结构）作为分割点，不聚合进 part。
+        未保护的短列表视为上一段的附属内容，不触发 max_paras 分块。
+        max_paras 是软上限；当前块不足 min_chars 时继续聚合后续正文。
+        连续正文的尾块不足 min_chars 时，在不突破 max_words 的前提下向前合并。
+
+    cross_boundaries=True（P1 提速）：
+        标题作为"受保护行"随正文进块（不再切块）；仅当块词量达到
+        target_words 才切块（忽略段数软上限）。layout_skip=True（docx 源）
+        时表格/纯图占位直接跳过：不 flush、不占位、不进文本，前后正文
+        可同块。参考文献 / 代码块 / 题注 / 超链接段等仍为硬边界。
     """
     tasks = []
-    buffer = []      # 当前聚合的正文段
+    buffer = []      # 当前聚合的段落（正文段，cross 模式可含标题行）
     buffer_words = 0
     buffer_chars = 0
+    target_words = (
+        (block_target_words or max_words) if cross_boundaries else max_words
+    )
 
     def flush():
         nonlocal buffer, buffer_words, buffer_chars
         if buffer:
             body_text = "\n\n".join(p["text"] for p in buffer)
+            contains_headings = any(_is_heading(p) for p in buffer)
             # 同一连续正文区域的尾块不足最小字符数时，向前合并，避免
             # median 的最后一两个段落形成过短请求。
             previous = tasks[-1] if tasks else None
@@ -269,23 +331,58 @@ def _segment_aggregate(paragraphs, guard, max_paras, max_words, min_chars):
             if (
                 min_chars > 0 and len(body_text) < min_chars and
                 previous and previous["type"] == "rewrite" and
-                previous_words + buffer_words <= max_words
+                previous_words + buffer_words <= target_words
             ):
                 previous["text"] += "\n\n" + body_text
                 previous["paragraphs"].extend(buffer)
+                if contains_headings:
+                    previous["contains_headings"] = True
             else:
-                tasks.append({"type": "rewrite", "text": body_text,
-                              "paragraphs": buffer})
+                task = {"type": "rewrite", "text": body_text,
+                        "paragraphs": buffer}
+                if contains_headings:
+                    task["contains_headings"] = True
+                tasks.append(task)
             buffer = []
             buffer_words = 0
             buffer_chars = 0
 
     for para in paragraphs:
         if _is_layout_node(para):
+            if layout_skip:
+                # docx 表格/纯图占位：无文本、不参与改写。跨边界模式直接
+                # 跳过 —— 不打断 buffer 聚合；其 body_index 不在改写块的
+                # source_body_indexes 内，docx 回填只替换段落节点，表格
+                # XML 节点原位不动。
+                continue
             flush()
             tasks.append({"type": "layout", "text": "", "paragraphs": [para]})
         elif guard.should_protect(para):
-            # 标题 / 参考文献，以及按配置启用的短段保护，是硬边界。
+            # 只有"纯标题"允许跨边界随正文进块；References / 题注 / 代码块
+            # / TOC 等真实保护结构即使带标题样式也必须保持硬边界，否则
+            # 会被改写或让回填错位。
+            protected_attrs = (
+                "is_reference", "is_code_block", "is_toc",
+                "is_front_matter", "is_caption",
+                "has_image", "has_hyperlink",
+            )
+            heading_crossable = (
+                cross_boundaries and _is_heading(para) and
+                not any(para.get(flag) for flag in protected_attrs)
+            )
+            if heading_crossable:
+                # 标题作为"受保护行"随正文进块：文本随块发送（上游实测
+                # 对标题式短行保留率 1.0），改写后由 adapter 层按段位
+                # 强制还原为原标题文本。标题极短，不参与词量切块判断。
+                w = _count_words(para)
+                text_chars = len((para.get("text") or "").strip())
+                if buffer:
+                    buffer_chars += 2
+                buffer.append(para)
+                buffer_words += w
+                buffer_chars += text_chars
+                continue
+            # 参考文献 / 代码块 / 题注等（以及 low 档下的标题）是硬边界。
             flush()
             tasks.append({"type": "protected", "text": para["text"],
                           "paragraphs": [para]})
@@ -299,10 +396,15 @@ def _segment_aggregate(paragraphs, guard, max_paras, max_words, min_chars):
             )
             # 达到段数软上限且已满足最小字符数，或加入本段将超过单次请求
             # 最大词数时，开启新块。短列表不触发段数软上限。
-            if buffer and (
-                (not sticky_short_list and reached_soft_limit) or
-                buffer_words + w > max_words
-            ):
+            if cross_boundaries:
+                # P1：忽略段数软上限，仅按目标词量切块。
+                hard = buffer_words + w > target_words
+            else:
+                hard = (
+                    (not sticky_short_list and reached_soft_limit) or
+                    buffer_words + w > max_words
+                )
+            if buffer and hard:
                 flush()
             if buffer:
                 buffer_chars += 2  # 与最终块文本中的段落分隔符 \n\n 一致

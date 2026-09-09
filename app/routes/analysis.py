@@ -10,6 +10,7 @@ paragraph_list_to_text 将所有带 text 字段的节点拼成纯文本。因此
 """
 
 import uuid
+import hashlib
 import os
 import logging
 import shutil
@@ -100,6 +101,17 @@ def api_analyze():
 
     word_count = len(text.split())
 
+    # 返回余额，让已有余额的用户直接进入全文改写，不再被免费预览流程拦截。
+    from app.models import User, get_connection
+    balance_conn = get_connection()
+    try:
+        user_id = session.get('user_id')
+        word_balance = User.get_balance(balance_conn, user_id)
+        det_free, det_paid = User.get_detection_quota(balance_conn, user_id)
+        detection_balance = det_free + det_paid
+    finally:
+        balance_conn.close()
+
     # 检测免费；返回改写费用预估（改写扣 word_balance，price 仅作展示）
     price = round(PRICE_PER_1000_WORDS * (word_count / 1000), 2)
 
@@ -110,11 +122,46 @@ def api_analyze():
     except Exception:
         logging.exception("AI analysis failed")
         return jsonify({"error": "分析出错，请稍后重试"}), 500
+    if full_analysis.get("error_code"):
+        logging.error("AI detector unavailable: %s", full_analysis.get("error"))
+        if full_analysis.get("error_code") == "v2_insufficient_supported_text":
+            return jsonify({
+                "error": "当前检测器需要至少 40 个英文单词，请补充内容后重试",
+                "error_code": full_analysis.get("error_code"),
+            }), 400
+        return jsonify({
+            "error": "AI 检测暂时不可用，请稍后重试",
+            "error_code": full_analysis.get("error_code"),
+        }), 503
 
     session['last_text'] = text
     # D 方案：缓存原文检测，供 /api/rewrite 复用（省 1 次 sapling 调用）
     from app.helpers.tasks import cache_original_analysis
     cache_original_analysis(text, full_analysis)
+    session['last_analysis_summary'] = {
+        'text_hash': hashlib.md5(text.encode('utf-8')).hexdigest(),
+        'backend': full_analysis.get('backend'),
+        'model_version': full_analysis.get('model_version'),
+        'ai_score': full_analysis.get('ai_score'),
+        'risk_percent': full_analysis.get('risk_percent'),
+        'coverage': full_analysis.get('coverage', 1.0),
+        'error_code': full_analysis.get('error_code'),
+    }
+
+    import config as project_config
+    score = full_analysis.get("risk_percent")
+    if score is None:
+        score = full_analysis.get("ai_score")
+    protected_no_charge = (
+        getattr(project_config, "REWRITE_ROUTING_POLICY", "")
+        == "risk_band_segmented"
+        and score is not None
+        and float(score) < 20
+        and float(full_analysis.get("coverage", 1.0)) >= float(
+            getattr(project_config, "V2_REJECT_COVERAGE", 0.60)
+        )
+    )
+    rewrite_words = 0 if protected_no_charge else word_count
 
     return jsonify({
         "success": True,
@@ -123,7 +170,12 @@ def api_analyze():
         "text_preview": text[:500] + "..." if len(text) > 500 else text,
         "word_count": word_count,
         "price": round(price, 2),
-        "rewrite_words": word_count,   # 改写需扣除的 word_balance 词数
+        "rewrite_words": rewrite_words,
+        "balance": word_balance,
+        "rewrite_balance": word_balance,
+        "detection_balance": detection_balance,
+        "balance_sufficient": word_balance >= rewrite_words,
+        "protected_no_charge": protected_no_charge,
         "has_extracted_text": original_format != 'txt',
         "original_format": original_format,
         "original_filename": original_filename

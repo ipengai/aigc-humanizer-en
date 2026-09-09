@@ -77,6 +77,10 @@ function updateNavbar(user) {
             updateNavBalance(0);
         }
     }
+    // AI 检测额度（仅含 #nav-det-quota 的页面生效，如 /ai-detect/）
+    if (typeof updateNavDetQuota === 'function') {
+        updateNavDetQuota(user ? (user.detection_words || 0) : 0, user);
+    }
 }
 
 function updateNavBalance(balance) {
@@ -88,6 +92,22 @@ function updateNavBalance(balance) {
     } else {
         el.style.display = 'none';
     }
+}
+
+function updateNavDetQuota(words, user) {
+    const el = document.getElementById('nav-det-quota');
+    if (!el) return;
+    if (!user) {
+        el.style.display = 'none';
+        el.onclick = null;
+        return;
+    }
+    el.textContent = '🔍 AI Detector ' + (words || 0) + ' 词';
+    el.style.display = 'inline-flex';
+    const low = (words || 0) < 200;
+    el.classList.toggle('nav-balance-low', low);
+    // 始终可点：打开检测词充值弹窗（手动选档模式）；低额度时红色提醒
+    el.onclick = () => { if (typeof openDetRechargeModal === 'function') openDetRechargeModal(); };
 }
 
 /* ========== AUTH MODAL ========== */
@@ -182,6 +202,8 @@ async function handleLogin() {
         if (typeof _hmt !== 'undefined') _hmt.push(['_trackEvent', 'user', 'login_success']);
 
         if (typeof resumePendingPayment === 'function') resumePendingPayment();
+        // 登录/注册成功 → 自动续跑被 401/额度不足拦截的检测
+        if (typeof detResumePendingAnalysis === 'function') detResumePendingAnalysis();
 
         // Clear login fields
         document.getElementById('login-email').value = '';
@@ -251,6 +273,8 @@ async function handleRegister() {
         if (typeof _hmt !== 'undefined') _hmt.push(['_trackEvent', 'user', 'register_success']);
 
         if (typeof resumePendingPayment === 'function') resumePendingPayment();
+        // 登录/注册成功 → 自动续跑被 401/额度不足拦截的检测
+        if (typeof detResumePendingAnalysis === 'function') detResumePendingAnalysis();
 
         // Clear register fields
         document.getElementById('register-email').value = '';

@@ -58,7 +58,36 @@ function handleFileSelect(file) {
 if (uploadForm) {
     uploadForm.addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (analyzeBtn?.dataset.action === 'rewrite') {
+            triggerRewrite(
+                Number(analyzeBtn.dataset.wordCount || 0),
+                Number(analyzeBtn.dataset.price || 0),
+            );
+            return;
+        }
         await analyzeText();
+    });
+}
+
+// Keep one click handler for the primary action. The old implementation added
+// and aborted handlers after analysis, which could leave the first rewrite
+// click handled by the form's original submit path.
+if (analyzeBtn) {
+    analyzeBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (analyzeBtn.dataset.action !== 'rewrite') {
+            analyzeText();
+            return;
+        }
+        if (!currentUser) {
+            showToast('请先登录，注册即送 200 词免费额度', 'info');
+            showAuthModal('login');
+            return;
+        }
+        triggerRewrite(
+            Number(analyzeBtn.dataset.wordCount || 0),
+            Number(analyzeBtn.dataset.price || 0),
+        );
     });
 }
 
@@ -133,16 +162,31 @@ async function handleAnalyzeResponse(data) {
 
     const wordCount = data.word_count;
     const price = data.price;
-    const aiScore = data.analysis?.ai_score || 0;
+    // v2 检测器输出的 risk_percent 是原始 float（如 53.35044016517786），统一保留 1 位小数
+    // 与改写结果 / 订单页保持一致。
+    const rawAiScore = data.analysis?.ai_score ?? data.analysis?.risk_percent ?? 0;
+    const aiScore = Math.round(Number(rawAiScore) * 10) / 10;
 
     // Store AI score for display
     sessionStorage.setItem('lastAiScore', aiScore);
+    // 改写余额 vs 检测余额（双桶），触发预览时向用户解释原因
+    sessionStorage.setItem('lastRewriteBalance', String(data.rewrite_balance ?? data.balance ?? 0));
+    sessionStorage.setItem('lastDetectionBalance', String(data.detection_balance ?? 0));
+    sessionStorage.setItem('lastWordCount', String(wordCount));
 
     // 检测完成，不展示分析结果页，直接进入一键改写流程
     updateRewriteButton(wordCount, price);
 
-    // 检测完成：先免费预览前 200 词（建立信任），全文需解锁才改写
-    triggerPreview(wordCount, price);
+    // 有足够余额时直接使用全文改写流程；余额不足时才展示免费预览。
+    if (data.balance_sufficient) {
+        const preview = document.getElementById('preview-section');
+        if (preview) preview.style.display = 'none';
+        // 一键改写的第一次点击先完成检测，检测成功后立即进入改写，
+        // 不再要求用户再次点击主按钮。
+        await triggerRewrite(wordCount, price);
+    } else {
+        triggerPreview(wordCount, price);
+    }
 
     // Baidu Tongji: track analysis complete
     if (typeof _hmt !== 'undefined') _hmt.push(['_trackEvent', 'engagement', 'analyze_complete', '', aiScore]);
@@ -150,37 +194,18 @@ async function handleAnalyzeResponse(data) {
 }
 
 /* ========== REWRITE BUTTON STATE ========== */
-const _rewriteController = { current: null };
-
 function updateRewriteButton(wordCount, price) {
-    const btn = document.getElementById('rewrite-btn');
-    const btnText = document.getElementById('rewrite-btn-text');
+    const btn = document.getElementById('analyze-btn');
+    const btnText = btn && (btn.querySelector('.btn-label') || document.getElementById('rewrite-btn-text'));
     if (!btn || !btnText) return;
 
-    // Cancel previous listeners (AbortController), preserving other listeners on the element
-    if (_rewriteController.current) _rewriteController.current.abort();
-    const ac = new AbortController();
-    _rewriteController.current = ac;
-    const signal = ac.signal;
-
+    // The same primary button starts as form submit (analysis), then becomes
+    // a normal button after analysis so the next click starts rewriting.
+    btn.type = 'button';
+    btn.dataset.action = 'rewrite';
+    btn.dataset.wordCount = String(wordCount || 0);
+    btn.dataset.price = String(price || 0);
     btnText.textContent = '🚀 一键改写';
-
-    if (!currentUser) {
-        // 未登录：点击提示注册登录（注册即送200词）
-        btnText.textContent = '🚀 一键改写（登录后使用）';
-        btn.addEventListener('click', () => {
-            // Baidu Tongji: track rewrite button click (not logged in)
-            if (typeof _hmt !== 'undefined') _hmt.push(['_trackEvent', 'engagement', 'rewrite_click', 'not_logged_in']);
-            showToast('请先登录，注册即送 200 词免费额度', 'info');
-            showAuthModal('login');
-        }, { signal });
-        return;
-    }
-
-    // 已登录：绑定点击调用一键改写
-    btn.addEventListener('click', () => {
-        triggerRewrite(wordCount, price);
-    }, { signal });
 }
 
 /* 读取当前选中的改写模式（下拉，默认 median） */
@@ -301,6 +326,21 @@ async function triggerPreview(wordCount, price) {
     setPreviewUnlockEnabled(false);
     section.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
+    // 余额不足触发预览时，解释改写余额与检测余额是分开的两个桶
+    const infoEl = document.getElementById('preview-balance-info');
+    if (infoEl) {
+        const rb = Number(sessionStorage.getItem('lastRewriteBalance') || 0);
+        const db = Number(sessionStorage.getItem('lastDetectionBalance') || 0);
+        const needed = Number(sessionStorage.getItem('lastWordCount') || wordCount || 0);
+        let msg = `当前改写余额 <strong>${rb}</strong> 词，本次需 <strong>${needed}</strong> 词，不足以支付全文。`;
+        if (db > 0) {
+            msg += ` 账户另有检测额度 <strong>${db}</strong> 词，<em>检测额度不能用于改写</em>。`;
+        }
+        msg += ' 请先充值改写额度，或直接解锁全文。';
+        infoEl.innerHTML = msg;
+    }
+
+
     try {
         const resp = await _csrfFetch('/api/rewrite-preview', {
             method: 'POST',
@@ -350,8 +390,18 @@ function displayPreviewResult(data, wordCount, price) {
     const previewed = data.preview_words || (data.original && data.original.text ? data.original.text.split(/\s+/).length : 0);
     if (remEl) remEl.textContent = Math.max(0, full - previewed);
 
-    if (origScore) origScore.textContent = (data.original && data.original.ai_score != null ? data.original.ai_score : 0) + '%';
-    if (newScore) newScore.textContent = (data.rewritten && data.rewritten.ai_score != null ? data.rewritten.ai_score : 0) + '%';
+    // 兜底保留 1 位小数；后端 rewrite.py:256,261,342,347 已经 round(score, 1)，
+    // 但旧 cache / 老 analyze 接口返回的 risk_percent 仍是原始 float。
+    const fmtScore = (v) => (Math.round(Number(v ?? 0) * 10) / 10);
+
+    if (origScore) {
+        const v = data.original ? (data.original.ai_score ?? data.original.risk_percent) : null;
+        origScore.textContent = (v != null ? fmtScore(v) : 0) + '%';
+    }
+    if (newScore) {
+        const v = data.rewritten ? (data.rewritten.ai_score ?? data.rewritten.risk_percent) : null;
+        newScore.textContent = (v != null ? fmtScore(v) : 0) + '%';
+    }
     updateImprovementBadge(impEl, data.improvement);
 
     const section = document.getElementById('preview-section');
@@ -435,6 +485,7 @@ async function triggerRewrite(wordCount, price) {
 /* ========== 异步改写轮询（余额充足场景） ========== */
 let _balancePollingTimer = null;
 let _balancePollingToken = 0;
+let _lastRewriteProgressStage = 'parse';
 
 /**
  * 直接改写（余额充足）为异步执行，这里轮询真实进度更新步骤条，
@@ -444,6 +495,7 @@ let _balancePollingToken = 0;
  */
 function startBalanceRewritePolling(orderId, balanceRemaining) {
     const pollingToken = ++_balancePollingToken;
+    _lastRewriteProgressStage = 'parse';
     if (_balancePollingTimer) {
         clearTimeout(_balancePollingTimer);
         _balancePollingTimer = null;
@@ -456,7 +508,9 @@ function startBalanceRewritePolling(orderId, balanceRemaining) {
         resetLoadingSteps();
     }
     const pollingStartedAt = Date.now();
-    const pollingTimeoutMs = 15 * 60 * 1000;
+    // 长文档（v2 逐块路由）改写可达 30-40 分钟：轮询上限放宽到 60 分钟，
+    // 并在页面实时显示"第 x/Y 块"，避免用户误判为卡死。
+    const pollingTimeoutMs = 60 * 60 * 1000;
     // 每秒轮询持久化进度，兼顾实时性和数据库负载。
     const pollOnce = async () => {
         if (pollingToken !== _balancePollingToken) return;
@@ -464,7 +518,7 @@ function startBalanceRewritePolling(orderId, balanceRemaining) {
             _balancePollingToken++;
             _balancePollingTimer = null;
             hideLoading();
-            showToast('处理时间较长，请稍后在订单记录中查看结果', 'info');
+            showToast('处理时间超过 60 分钟，请到「订单记录」中查看改写结果', 'info');
             return;
         }
         try {
@@ -493,7 +547,7 @@ function startBalanceRewritePolling(orderId, balanceRemaining) {
                 // 改写完成：进度接口已附带完整改写结果（result 字段），直接展示
                 _balancePollingToken++;
                 _balancePollingTimer = null;
-                setLoadingStep('detect_again', 'done');
+                setLoadingStep(_lastRewriteProgressStage || 'detect_again', 'done');
                 finishBalanceRewrite(prog.result, balanceRemaining, orderId);
                 return;
             }
@@ -504,9 +558,30 @@ function startBalanceRewritePolling(orderId, balanceRemaining) {
                 showToast('改写失败，请稍后重试', 'error');
                 return;
             }
-            // 更新进度步骤条（stage: parse/detect/rewrite/detect_again）
+            // 更新真实进度，包括首轮复检后可能触发的定向二次改写。
             if (typeof setLoadingStep === 'function') {
                 setLoadingStep(prog.stage);
+            }
+            _lastRewriteProgressStage = prog.stage;
+            const loadingTitle = document.getElementById('loading-title');
+            if (loadingTitle && prog.message) {
+                loadingTitle.textContent = prog.message;
+            }
+            // 块级改写真实进度：显示"第 x/Y 块"与粗估剩余时间，
+            // 防止用户在长文档改写期间把"仍在推进"误判为卡死。
+            if (prog.stage === 'rewrite' && prog.total_blocks > 1) {
+                const blockNow = Math.min(Number(prog.block) || 1, Number(prog.total_blocks) || 1);
+                const totalNow = Number(prog.total_blocks) || 1;
+                const remainMin = Math.max(1, Math.ceil((totalNow - blockNow + 1) * 1.1));
+                const sub = document.getElementById('loading-sub');
+                if (loadingTitle) loadingTitle.textContent = `正在改写内容（第 ${blockNow}/${totalNow} 块）`;
+                if (sub) {
+                    sub.style.display = 'block';
+                    sub.textContent = `预计还需约 ${remainMin} 分钟，长文档会稍久一些，请勿关闭页面`;
+                }
+            } else {
+                const sub = document.getElementById('loading-sub');
+                if (sub) sub.style.display = 'none';
             }
         } catch (err) {
             // 轮询出错静默继续

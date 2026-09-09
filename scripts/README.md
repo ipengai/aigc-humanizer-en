@@ -1,5 +1,28 @@
 # 运维脚本
 
+## v2 检测结果归因
+
+`explain_v2_detector.py` 沿 `turnitin_fit_detector_v2` 随机森林的实际决策路径，
+把每次节点概率变化归到对应特征，并分别汇总为段落和全文贡献。贡献之和会自动
+校验并精确重建模型分数。该方法类似 TreeInterpreter/Saabas，适合定位模型为何
+判高或判低；它不是精确 TreeSHAP，也不代表因果关系。
+
+```bash
+# 单篇查看 JSON
+.venv/bin/python scripts/explain_v2_detector.py experiment/P01_130/huma.txt
+
+# 批量生成完整 JSON 和便于阅读的 Markdown
+.venv/bin/python scripts/explain_v2_detector.py \
+  P01-huma=experiment/P01_130/huma.txt \
+  P01-lynote=experiment/P01_130/lynote.txt \
+  --json-out experiment/v2_attribution/report.json \
+  --markdown-out experiment/v2_attribution/report.md
+```
+
+每项结果包含全文风险分、覆盖率、模型平均起点、主要推高/压低特征，以及高风险
+段落的特征贡献。`reconstruction_error` 应接近 0；模型或特征代码不兼容时脚本会
+直接报错，避免输出无法自洽的解释。
+
 ## 导出检测前后对比数据
 
 `export_detector_comparisons.py` 以只读方式解析 `orders` 表，将完整的改写前后

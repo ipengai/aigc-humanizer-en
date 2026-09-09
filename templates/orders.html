@@ -46,7 +46,8 @@
                 <span class="menu-bar"></span>
             </button>
             <div class="nav-links">
-                <a href="/#features" class="nav-link">介绍</a>
+                <a href="/" class="nav-link">AI改写</a>
+                <a href="/ai-detect/" class="nav-link">AI Detector</a>
                 <a href="/#pricing" class="nav-link">定价</a>
                 <a href="/faq" class="nav-link">使用帮助</a>
                 <a href="/orders" class="nav-link" id="orders-link" style="display:none;">个人账户</a>
@@ -183,9 +184,9 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='common.js', v='20260824-1') }}"></script>
-    <script src="{{ url_for('static', filename='auth.js') }}"></script>
-    <script src="{{ url_for('static', filename='main.js', v='20260901-2') }}"></script>
+ <script src="{{ url_for('static', filename='common.js', v='20260909-5') }}"></script>
+ <script src="{{ url_for('static', filename='auth.js', v='20260909-5') }}"></script>
+ <script src="{{ url_for('static', filename='main.js', v='20260909-10') }}"></script>
     {% if not needs_login %}
     <script>
         // Wait for checkLoginStatus to complete before loading orders

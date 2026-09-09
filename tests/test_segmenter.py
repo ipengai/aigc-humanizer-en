@@ -15,6 +15,30 @@ def paragraph(text, *, heading=False, list_text=None):
 
 
 class SegmenterShortParagraphTests(unittest.TestCase):
+    def test_resegmentation_preserves_nested_docx_body_indexes(self):
+        paragraphs = [
+            {
+                "text": "First rewritten block with enough ordinary words.",
+                "word_count": 8,
+                "source_format": "docx",
+                "source_body_indexes": [1, 2, 3],
+            },
+            {
+                "text": "Second rewritten block with enough ordinary words.",
+                "word_count": 8,
+                "source_format": "docx",
+                "source_body_indexes": [5, 6],
+            },
+        ]
+
+        tasks = segment(
+            paragraphs, mode="median", min_chars=0,
+            cross_boundaries=True, block_target_words=100,
+        )
+
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["source_body_indexes"], [1, 2, 3, 5, 6])
+
     def test_short_body_is_aggregated_by_default(self):
         paragraphs = [
             paragraph("A normal body paragraph containing enough words for rewriting safely."),

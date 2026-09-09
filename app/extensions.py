@@ -18,13 +18,15 @@ document_executor = ThreadPoolExecutor(max_workers=2)
 payment_adapter = None
 humanizer_adapter = None
 ai_detector = None          # analyze_text(text) -> dict
+rewrite_providers = {}      # optional named providers used by app.pipeline
 
 
-def set_adapters(payment, humanizer):
+def set_adapters(payment, humanizer, providers=None):
     """Set payment and humanizer adapters (called once during app creation)."""
-    global payment_adapter, humanizer_adapter
+    global payment_adapter, humanizer_adapter, rewrite_providers
     payment_adapter = payment
     humanizer_adapter = humanizer
+    rewrite_providers = providers or {}
     logging.info(
         f"Adapters initialized: payment={type(payment).__name__}, "
         f"humanizer={type(humanizer).__name__}"

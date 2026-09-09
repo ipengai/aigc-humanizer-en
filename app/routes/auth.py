@@ -60,8 +60,14 @@ def api_register():
                 "id": user['id'],
                 "email": user['email'],
                 "word_balance": user.get('word_balance', 0),
+                "detection_words": user.get('detection_free_words', 0) + user.get('detection_paid_words', 0),
+                "detection_free_words": user.get('detection_free_words', 0),
+                "detection_paid_words": user.get('detection_paid_words', 0),
             },
-            "message": f"注册成功，已赠送 {user.get('word_balance', 0)} 词免费额度"
+            "message": (
+                f"注册成功，已赠送 {user.get('word_balance', 0)} 词改写额度"
+                f" + {user.get('detection_free_words', 0)} 词 AI 检测额度"
+            )
         }), 201
     except Exception:
         logging.exception("注册失败")
@@ -92,12 +98,16 @@ def api_login():
         (datetime.now(timezone.utc).isoformat(), user['id'])
     )
     conn.commit()
+    det_free, det_paid = User.get_detection_quota(conn, user['id'])
     return jsonify({
         "success": True,
         "user": {
             "id": user['id'],
             "email": user['email'],
             "word_balance": user.get('word_balance', 0),
+            "detection_words": det_free + det_paid,
+            "detection_free_words": det_free,
+            "detection_paid_words": det_paid,
         }
     })
 
@@ -127,11 +137,15 @@ def api_me():
         response.headers['Cache-Control'] = 'no-store, private'
         return response, 401
 
+    det_free, det_paid = User.get_detection_quota(conn, user_id)
     response = jsonify({
         "user": {
             "id": user['id'],
             "email": user['email'],
             "word_balance": user.get('word_balance', 0),
+            "detection_words": det_free + det_paid,
+            "detection_free_words": det_free,
+            "detection_paid_words": det_paid,
         }
     })
     response.headers['Cache-Control'] = 'no-store, private'

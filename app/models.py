@@ -9,6 +9,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from config import PROJ_ROOT, SIGNUP_BONUS_WORDS
+from config_detector import DETECTION_SIGNUP_BONUS, DETECTION_MONTHLY_QUOTA
 
 DB_DIR = os.path.join(PROJ_ROOT, 'instance')
 DB_PATH = os.path.join(DB_DIR, 'aigc_humanizer.db')
@@ -60,19 +61,35 @@ class User:
             conn.execute("ALTER TABLE users ADD COLUMN word_balance INTEGER DEFAULT 0")
         if 'last_login_at' not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+        # 检测额度：免费桶按自然月重置 + 充值桶永不清零。
+        # 存量用户默认给一个自然月的初始免费额度（1000），reset_at=NULL 时首次读取自动写重置时间。
+        if 'detection_free_words' not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN detection_free_words INTEGER DEFAULT 1000"
+            )
+        if 'detection_paid_words' not in columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN detection_paid_words INTEGER DEFAULT 0"
+            )
+        if 'detection_free_reset_at' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN detection_free_reset_at TEXT")
         conn.commit()
 
     @classmethod
     def create(cls, conn, email, password):
         """Create a new user. Password is hashed via werkzeug.security.
-        注册即赠送 SIGNUP_BONUS_WORDS 词数余额。
+        注册即赠送 SIGNUP_BONUS_WORDS 词数余额（改写）+ DETECTION_SIGNUP_BONUS
+        检测词（AI 检测，独立额度）。
         """
         password_hash = generate_password_hash(password, method='pbkdf2:sha256')
         created_at = datetime.now(timezone.utc).isoformat()
+        first_reset = cls._next_month_reset(datetime.now(timezone.utc)).isoformat()
         cursor = conn.execute(
-            "INSERT INTO users (email, password_hash, created_at, word_balance) "
-            "VALUES (?, ?, ?, ?)",
-            (email, password_hash, created_at, SIGNUP_BONUS_WORDS)
+            "INSERT INTO users (email, password_hash, created_at, word_balance, "
+            "detection_free_words, detection_free_reset_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (email, password_hash, created_at, SIGNUP_BONUS_WORDS,
+             DETECTION_SIGNUP_BONUS, first_reset)
         )
         conn.commit()
         return cls.get_by_id(conn, cursor.lastrowid)
@@ -132,6 +149,93 @@ class User:
         ).fetchone()
         return row['word_balance'] if row else 0
 
+    # ========== Detection words methods (独立于改写余额) ==========
+    # 双桶设计：detection_free_words 每自然月重置为 DETECTION_MONTHLY_QUOTA（不用不结转）；
+    # detection_paid_words 为充值所得、永不清零。扣减顺序：先免费后充值。
+
+    DETECTION_TZ = timezone(timedelta(hours=8))  # 北京时区自然月对齐
+
+    @classmethod
+    def _next_month_reset(cls, now):
+        """Return the UTC instant of the next calendar-month start (Beijing time)."""
+        tz_now = now.astimezone(cls.DETECTION_TZ)
+        year = tz_now.year + (1 if tz_now.month == 12 else 0)
+        month = 1 if tz_now.month == 12 else tz_now.month + 1
+        return datetime(year, month, 1, tzinfo=cls.DETECTION_TZ).astimezone(timezone.utc)
+
+    @classmethod
+    def get_detection_quota(cls, conn, user_id):
+        """Get (free_words, paid_words). Resets the free bucket first if its
+        calendar month has rolled over. May write (reset) to the database.
+        """
+        row = conn.execute(
+            "SELECT detection_free_words, detection_paid_words, detection_free_reset_at "
+            "FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return 0, 0
+        free = int(row['detection_free_words'] or 0)
+        paid = int(row['detection_paid_words'] or 0)
+        raw_reset = row['detection_free_reset_at']
+        now = datetime.now(timezone.utc)
+        need_reset = False
+        if not raw_reset:
+            need_reset = True
+        else:
+            try:
+                need_reset = now >= datetime.fromisoformat(raw_reset)
+            except (TypeError, ValueError):
+                need_reset = True
+        if need_reset:
+            free = DETECTION_MONTHLY_QUOTA
+            next_reset = cls._next_month_reset(now).isoformat()
+            conn.execute(
+                "UPDATE users SET detection_free_words = ?, detection_free_reset_at = ? "
+                "WHERE id = ?",
+                (free, next_reset, user_id),
+            )
+            conn.commit()
+        return free, paid
+
+    @classmethod
+    def add_detection_words(cls, conn, user_id, words):
+        """Add purchased detection words to the paid bucket (never reset)."""
+        conn.execute(
+            "UPDATE users SET detection_paid_words = detection_paid_words + ? "
+            "WHERE id = ?",
+            (words, user_id),
+        )
+
+    @classmethod
+    def deduct_detection_words(cls, conn, user_id, words):
+        """Deduct detection words atomically, free bucket first then paid.
+
+        Returns (free_after, paid_after) or None when the combined quota is
+        insufficient. Single UPDATE on old-row values keeps free/paid branches
+        consistent even when both columns are updated together.
+        """
+        if words <= 0:
+            return 0, 0
+        cursor = conn.execute(
+            """UPDATE users SET
+                 detection_free_words = CASE
+                     WHEN detection_free_words >= ? THEN detection_free_words - ?
+                     ELSE 0 END,
+                 detection_paid_words = CASE
+                     WHEN detection_free_words >= ? THEN detection_paid_words
+                     ELSE detection_paid_words - (? - detection_free_words) END
+               WHERE id = ? AND (detection_free_words + detection_paid_words) >= ?""",
+            (words, words, words, words, user_id, words),
+        )
+        if cursor.rowcount == 0:
+            return None
+        row = conn.execute(
+            "SELECT detection_free_words, detection_paid_words FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        return int(row['detection_free_words']), int(row['detection_paid_words'])
+
 
 class Order:
     """Order model — class methods for database operations."""
@@ -163,6 +267,7 @@ class Order:
                 fallback_block_count INTEGER DEFAULT 0,
                 rewrite_block_count INTEGER,
                 rewrite_pipeline_version TEXT,
+                rewrite_route_trace TEXT,
                 original_score REAL,
                 rewritten_score REAL,
                 input_type TEXT,
@@ -272,6 +377,7 @@ class Order:
             'fallback_block_count': 'INTEGER DEFAULT 0',
             'rewrite_block_count': 'INTEGER',
             'rewrite_pipeline_version': 'TEXT',
+            'rewrite_route_trace': 'TEXT',
             'input_type': 'TEXT',
             'traffic_source': 'TEXT',
             'utm_source': 'TEXT',
@@ -311,6 +417,10 @@ class Order:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_alipay_trade_no "
             "ON orders(alipay_trade_no) WHERE alipay_trade_no IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_orders_type_created_at "
+            "ON orders(order_type, created_at DESC)"
         )
         conn.commit()
 
@@ -397,7 +507,7 @@ class Order:
     def create_processing_order(cls, conn, user_id, order_id, original_text,
                                 original_format, original_filename, word_count,
                                 price, mode, paragraphs=None, source_file_key=None,
-                                analysis_context=None):
+                                analysis_context=None, balance_words_used=None):
         """Create a balance-deducted order in 'processing' status (async rewrite).
 
         与 create_balance_order 的区别：直接改写现改为异步（后台线程改写），
@@ -407,6 +517,8 @@ class Order:
         created_at = datetime.now(timezone.utc).isoformat()
         expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
         paragraphs_json = json.dumps(paragraphs, ensure_ascii=False) if paragraphs else None
+        if balance_words_used is None:
+            balance_words_used = word_count
         conn.execute(
             """INSERT INTO orders
                (user_id, order_id, original_text, paragraphs, rewritten_text,
@@ -417,7 +529,7 @@ class Order:
                VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL, 'processing', 'balance', ?, ?, ?, ?, ?, ?)""",
             (user_id, order_id, original_text, paragraphs_json,
              original_format, original_filename, word_count, price, mode,
-             word_count, User.get_balance(conn, user_id), source_file_key,
+             balance_words_used, User.get_balance(conn, user_id), source_file_key,
              'pending' if source_file_key and original_format == 'docx'
              else 'not_applicable', created_at, expires_at)
         )
@@ -590,6 +702,29 @@ class Order:
         return cls.get_by_order_id(conn, order_id)
 
     @classmethod
+    def create_detection_recharge_order(cls, conn, user_id, order_id, words,
+                                        price, expires_minutes=15):
+        """Create a pending detection-recharge order (order_type='detect_recharge').
+
+        Payment success only credits the detection quota (detection_paid_words);
+        it never touches the rewrite balance and never triggers a rewrite task.
+        ``recharge_words`` stores the purchased detection word count.
+        """
+        created_at = datetime.now(timezone.utc).isoformat()
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)).isoformat()
+        conn.execute(
+            """INSERT INTO orders
+               (user_id, order_id, original_text, word_count, price, mode,
+                status, payment_status, order_type, recharge_words,
+                document_status, created_at, expires_at)
+               VALUES (?, ?, '', 0, ?, 'detect', 'pending', 'pending',
+                       'detect_recharge', ?, 'not_applicable', ?, ?)""",
+            (user_id, order_id, price, words, created_at, expires_at)
+        )
+        conn.commit()
+        return cls.get_by_order_id(conn, order_id)
+
+    @classmethod
     def mark_paid(cls, conn, order_id, alipay_trade_no, paid_at):
         """Mark order as paid after Alipay notification.
 
@@ -689,6 +824,7 @@ class Order:
                    humanizer_primary = ?, humanizer_fallback = ?,
                    fallback_used = ?, fallback_block_count = ?,
                    rewrite_block_count = ?, rewrite_pipeline_version = ?,
+                   rewrite_route_trace = ?,
                    rewritten_word_count = ?, word_count_change_ratio = ?,
                    original_heading_count = ?, rewritten_heading_count = ?,
                    heading_count_changed = ?, rewritten_paragraph_count = ?,
@@ -712,6 +848,11 @@ class Order:
                 int(rewrite_metadata.get('fallback_block_count') or 0),
                 rewrite_metadata.get('rewrite_block_count'),
                 rewrite_metadata.get('rewrite_pipeline_version'),
+                json.dumps({
+                    'routing_policy': rewrite_metadata.get('routing_policy'),
+                    'route': rewrite_metadata.get('route'),
+                    'steps': rewrite_metadata.get('steps', []),
+                }, ensure_ascii=False),
                 rewritten_word_count,
                 word_count_change_ratio,
                 original_heading_count,

@@ -182,6 +182,12 @@ def api_orders():
             params
         ).fetchone()['total']
 
+        paid_recharge_words = conn.execute(
+            "SELECT COALESCE(SUM(o.recharge_words), 0) as total FROM orders o "
+            "WHERE " + where_sql + " AND o.payment_status = 'paid'",
+            params
+        ).fetchone()['total']
+
         # Status breakdown
         status_counts = {}
         for row in conn.execute(
@@ -223,6 +229,7 @@ def api_orders():
                 'expired_orders': status_counts.get('expired', 0),
                 'failed_orders': status_counts.get('failed', 0),
                 'total_revenue': round(total_revenue, 2),
+                'paid_recharge_words': int(paid_recharge_words or 0),
             },
             'orders': orders,
             'page': page,
@@ -961,6 +968,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
     <div class="tabs">
         <button class="tab-btn active" onclick="switchTab('orders')" id="tab-orders">📋 huma订单</button>
+        <button class="tab-btn" onclick="switchTab('detectorders')" id="tab-detectorders">🔍 AI检测订单</button>
         <button class="tab-btn" onclick="switchTab('agentteam')" id="tab-agentteam">🛒 AgentTeam</button>
                 <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats">📊 改写效果</button>
         <button class="tab-btn" onclick="switchTab('activation')" id="tab-activation">🎯 兑换码</button>
@@ -1105,6 +1113,55 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                 <div class="empty-icon">📭</div>
                 <p>该时间范围暂无订单</p>
             </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- ============ TAB: AI DETECTOR PAYMENT ORDERS ============ -->
+    <div class="tab-content" id="content-detectorders">
+    <div class="main">
+        <div class="toolbar">
+            <label>时间范围：</label>
+            <input type="date" id="det-order-date-start">
+            <span class="date-sep">至</span>
+            <input type="date" id="det-order-date-end">
+            <button class="btn-query" onclick="loadDetectOrders(1)">查询</button>
+            <button class="btn-preset" onclick="setDetectOrderPreset('today')">今天</button>
+            <button class="btn-preset" onclick="setDetectOrderPreset('7days')">近7天</button>
+            <button class="btn-preset" onclick="setDetectOrderPreset('30days')">近30天</button>
+            <button class="btn-preset" onclick="setDetectOrderPreset('all')">全部</button>
+        </div>
+
+        <div class="summary" id="det-order-summary" style="display:none;">
+            <div class="summary-card"><div class="label">订单总数</div><div class="value" id="det-order-total">0</div></div>
+            <div class="summary-card"><div class="label">已支付</div><div class="value" id="det-order-paid" style="color:#16a34a;">0</div></div>
+            <div class="summary-card"><div class="label">待支付</div><div class="value pending" id="det-order-pending">0</div></div>
+            <div class="summary-card"><div class="label">已售检测词数</div><div class="value" id="det-order-words" style="color:#4f46e5;">0</div></div>
+            <div class="summary-card"><div class="label">实收营收 (¥)</div><div class="value revenue" id="det-order-revenue">0.00</div></div>
+        </div>
+
+        <div class="error-banner" id="det-order-error" style="display:none;"></div>
+        <div class="loading" id="det-order-loading" style="display:none;"><div class="spinner"></div><div>加载中</div></div>
+
+        <div class="table-wrapper" id="det-order-table-wrapper" style="display:none;">
+            <div class="table-header"><h2>AI 检测付费订单</h2><span class="count-badge" id="det-order-count">0 条</span></div>
+            <table>
+                <thead><tr>
+                    <th>订单号</th><th>用户</th><th>充值词数</th><th>金额</th>
+                    <th>支付状态</th><th>到账状态</th><th>支付宝流水号</th>
+                    <th>创建时间</th><th>支付时间</th>
+                </tr></thead>
+                <tbody id="det-order-tbody"></tbody>
+            </table>
+            <div class="pagination" id="det-order-pagination" style="display:none;">
+                <button id="det-order-prev" onclick="goDetectOrderPage(-1)">← 上一页</button>
+                <span class="page-info" id="det-order-page-info">第 1 / 1 页</span>
+                <button id="det-order-next" onclick="goDetectOrderPage(1)">下一页 →</button>
+            </div>
+        </div>
+
+        <div class="table-wrapper" id="det-order-empty" style="display:none;">
+            <div class="empty"><div class="empty-icon">📭</div><p>该时间范围暂无 AI 检测付费订单</p></div>
         </div>
     </div>
     </div>
@@ -1434,6 +1491,8 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         let totalPages = 1;
         let expandedOrderId = null;
         let currentTab = 'orders';
+        let detectOrderPage = 1;
+        let detectOrderTotalPages = 1;
 
         const STATUS_BADGE = {
             paid: 'badge-paid', pending: 'badge-pending',
@@ -1501,6 +1560,8 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         const today = fmtDate(new Date());
         document.getElementById('date-start').value = today;
         document.getElementById('date-end').value = today;
+        document.getElementById('det-order-date-start').value = '2026-01-01';
+        document.getElementById('det-order-date-end').value = today;
         // AgentTeam tab 默认看全部历史
         document.getElementById('at-date-start').value = '2025-01-01';
         document.getElementById('at-date-end').value = today;
@@ -1754,6 +1815,96 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
 
     <script>
     /* ========== TAB SWITCHING ========== */
+    /* ========== AI DETECTOR PAYMENT ORDERS TAB ========== */
+    function setDetectOrderPreset(type) {
+        const now = new Date();
+        let start;
+        if (type === 'all') {
+            start = '2026-01-01';
+        } else if (type === 'today') {
+            start = fmtDate(now);
+        } else {
+            start = new Date(now);
+            start.setDate(start.getDate() - (type === '30days' ? 29 : 6));
+            start = fmtDate(start);
+        }
+        document.getElementById('det-order-date-start').value = start;
+        document.getElementById('det-order-date-end').value = fmtDate(now);
+        loadDetectOrders(1);
+    }
+
+    async function loadDetectOrders(page) {
+        detectOrderPage = page || detectOrderPage;
+        const start = document.getElementById('det-order-date-start').value;
+        const end = document.getElementById('det-order-date-end').value;
+        if (!start || !end) return;
+        const loading = document.getElementById('det-order-loading');
+        const table = document.getElementById('det-order-table-wrapper');
+        const summary = document.getElementById('det-order-summary');
+        const empty = document.getElementById('det-order-empty');
+        const error = document.getElementById('det-order-error');
+        loading.style.display = 'block';
+        table.style.display = 'none';
+        summary.style.display = 'none';
+        empty.style.display = 'none';
+        error.style.display = 'none';
+        try {
+            const qs = new URLSearchParams({
+                start, end, page: detectOrderPage, type: 'detect_recharge'
+            });
+            const resp = await fetch('/admin/api/orders?' + qs.toString());
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || '请求失败');
+            document.getElementById('det-order-total').textContent = data.summary.total_orders;
+            document.getElementById('det-order-paid').textContent = data.summary.paid_orders;
+            document.getElementById('det-order-pending').textContent = data.summary.pending_orders;
+            document.getElementById('det-order-words').textContent =
+                Number(data.summary.paid_recharge_words || 0).toLocaleString('zh-CN');
+            document.getElementById('det-order-revenue').textContent =
+                Number(data.summary.total_revenue || 0).toFixed(2);
+            summary.style.display = 'grid';
+            detectOrderPage = data.page;
+            detectOrderTotalPages = data.total_pages;
+            if (!data.orders.length) {
+                empty.style.display = 'block';
+                return;
+            }
+            document.getElementById('det-order-count').textContent = data.summary.total_orders + ' 条';
+            document.getElementById('det-order-tbody').innerHTML = data.orders.map(o => {
+                const ps = o.payment_status || 'pending';
+                const ss = o.status || 'pending';
+                return `<tr>
+                    <td style="font-family:monospace;font-size:0.78rem;">${escapeHtml(o.order_id)}</td>
+                    <td>${escapeHtml(o.user_email || '-')}</td>
+                    <td>${Number(o.recharge_words || 0).toLocaleString('zh-CN')} 词</td>
+                    <td>¥${Number(o.price || 0).toFixed(2)}</td>
+                    <td><span class="badge ${STATUS_BADGE[ps] || 'badge-pending'}">${STATUS_LABEL[ps] || ps}</span></td>
+                    <td><span class="badge ${ORDER_STATUS_BADGE[ss] || 'badge-pending'}">${ORDER_STATUS_LABEL[ss] || ss}</span></td>
+                    <td style="font-family:monospace;font-size:0.75rem;">${escapeHtml(o.alipay_trade_no || '-')}</td>
+                    <td style="font-size:0.78rem;color:#64748b;">${formatTime(o.created_at)}</td>
+                    <td style="font-size:0.78rem;color:#64748b;">${o.paid_at ? formatTime(o.paid_at) : '-'}</td>
+                </tr>`;
+            }).join('');
+            table.style.display = 'block';
+            const pagination = document.getElementById('det-order-pagination');
+            pagination.style.display = detectOrderTotalPages > 1 ? 'flex' : 'none';
+            document.getElementById('det-order-page-info').textContent =
+                `第 ${detectOrderPage} / ${detectOrderTotalPages} 页`;
+            document.getElementById('det-order-prev').disabled = detectOrderPage <= 1;
+            document.getElementById('det-order-next').disabled = detectOrderPage >= detectOrderTotalPages;
+        } catch (e) {
+            error.textContent = e.message;
+            error.style.display = 'block';
+        } finally {
+            loading.style.display = 'none';
+        }
+    }
+
+    function goDetectOrderPage(delta) {
+        const next = detectOrderPage + delta;
+        if (next >= 1 && next <= detectOrderTotalPages) loadDetectOrders(next);
+    }
+
     /* ========== AGENTTEAM TAB ========== */
     function setAtPreset(type) {
         const now = new Date();
@@ -1843,6 +1994,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         if (tab === 'trends') loadTrends();
         if (tab === 'stats') loadStats();
         if (tab === 'agentteam') loadAgentTeamOrders();
+        if (tab === 'detectorders') loadDetectOrders();
     }
 
     /* ========== REWRITE EFFECT STATS ========== */

@@ -96,10 +96,11 @@ def api_analyze():
     # 段落结构（含 style），供改写阶段判断标题/短段用；无样式信息时为 None
     session['last_paragraphs'] = paragraphs
 
-    if len(text) < 50:
-        return jsonify({"error": "文本太短，请提供至少 50 个字符"}), 400
-
     word_count = len(text.split())
+    if len(text) < 300 or word_count < 40:
+        return jsonify({
+            "error": "文本太短，请提供至少 300 个字符（约 40 个英文单词）"
+        }), 400
 
     # 返回余额，让已有余额的用户直接进入全文改写，不再被免费预览流程拦截。
     from app.models import User, get_connection

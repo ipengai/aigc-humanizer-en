@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import admin
-from app.models import Order, User
+from app.models import BalanceTransaction, Order, User
 
 
 def _database(path):
@@ -14,6 +14,7 @@ def _database(path):
     conn.execute("PRAGMA foreign_keys=ON")
     User.init_table(conn)
     Order.init_table(conn)
+    BalanceTransaction.init_table(conn)
     conn.execute(
         """INSERT INTO users
            (id, email, password_hash, created_at, word_balance)
@@ -98,6 +99,36 @@ class AdminDetectionOrderTests(unittest.TestCase):
         self.assertIn('id="content-detectorders"', template)
         self.assertIn("type: 'detect_recharge'", template)
         self.assertIn("if (tab === 'detectorders') loadDetectOrders()", template)
+
+    def test_dashboard_keeps_business_trend_tab_reachable(self):
+        template = admin.DASHBOARD_TEMPLATE
+        self.assertIn('id="tab-trends"', template)
+        self.assertIn('id="content-trends"', template)
+        self.assertIn("if (tab === 'trends') loadTrends()", template)
+
+    def test_admin_users_include_detection_balance(self):
+        conn = _database(self.db_path)
+        try:
+            conn.execute(
+                "UPDATE users SET detection_free_words=477, detection_paid_words=2000 "
+                "WHERE id=1"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with mock.patch.object(admin, "DB_PATH", str(self.db_path)):
+            admin.admin_app.config.update(TESTING=True)
+            client = admin.admin_app.test_client()
+            with client.session_transaction() as session:
+                session["admin_authenticated"] = True
+            response = client.get("/admin/api/users")
+
+        self.assertEqual(response.status_code, 200)
+        user = response.get_json()["users"][0]
+        self.assertEqual(user["detection_free_words"], 477)
+        self.assertEqual(user["detection_paid_words"], 2000)
+        self.assertEqual(user["detection_balance"], 2477)
 
 
 if __name__ == "__main__":

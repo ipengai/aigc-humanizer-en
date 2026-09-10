@@ -576,7 +576,11 @@ def api_users():
         # Per-user aggregation: balance + total recharge + total spent (in words)
         sql = f'''
             SELECT
-                u.id, u.email, u.word_balance, u.created_at, u.last_login_at,
+                u.id, u.email, u.word_balance,
+                u.detection_free_words, u.detection_paid_words,
+                (COALESCE(u.detection_free_words, 0) +
+                 COALESCE(u.detection_paid_words, 0)) AS detection_balance,
+                u.created_at, u.last_login_at,
                 COALESCE(SUM(CASE WHEN bt.transaction_type = 'payment_recharge' THEN bt.words ELSE 0 END), 0) AS total_recharged,
                 COALESCE(SUM(CASE WHEN bt.transaction_type = 'rewrite_consumption' THEN ABS(bt.words) ELSE 0 END), 0) AS total_spent,
                 (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS order_count,
@@ -1011,7 +1015,8 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         <button class="tab-btn active" onclick="switchTab('orders')" id="tab-orders">📋 huma订单</button>
         <button class="tab-btn" onclick="switchTab('detectorders')" id="tab-detectorders">🔍 AI检测订单</button>
         <button class="tab-btn" onclick="switchTab('agentteam')" id="tab-agentteam">🛒 AgentTeam</button>
-                <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats">📊 改写效果</button>
+        <button class="tab-btn" onclick="switchTab('trends')" id="tab-trends">📈 业务趋势</button>
+        <button class="tab-btn" onclick="switchTab('stats')" id="tab-stats">📊 改写效果</button>
         <button class="tab-btn" onclick="switchTab('activation')" id="tab-activation">🎯 兑换码</button>
         <button class="tab-btn" onclick="switchTab('users')" id="tab-users">👤 用户</button>
     </div>
@@ -1514,6 +1519,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                         <th>ID</th>
                         <th>邮箱</th>
                         <th>余额（词）</th>
+                        <th>检测余额（词）</th>
                         <th>累计充值</th>
                         <th>累计消费</th>
                         <th>订单数</th>
@@ -2275,7 +2281,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             // Table
             const tbody = document.getElementById('users-tbody');
             if (data.users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:#94a3b8;">暂无用户</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#94a3b8;">暂无用户</td></tr>';
                 return;
             }
             tbody.innerHTML = data.users.map(u => {
@@ -2285,6 +2291,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                     <td>${u.id}</td>
                     <td style="font-family:monospace;font-size:0.85rem;">${escapeHtml(u.email)}</td>
                     <td style="font-weight:600;color:${balanceColor};">${balance.toLocaleString()}</td>
+                    <td title="免费 ${Number(u.detection_free_words || 0).toLocaleString()} + 充值 ${Number(u.detection_paid_words || 0).toLocaleString()}">${Number(u.detection_balance || 0).toLocaleString()}</td>
                     <td style="color:#4f46e5;">+${(u.total_recharged || 0).toLocaleString()}</td>
                     <td style="color:#ca8a04;">-${(u.total_spent || 0).toLocaleString()}</td>
                     <td>${u.order_count}</td>

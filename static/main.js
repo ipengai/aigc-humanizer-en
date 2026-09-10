@@ -112,9 +112,9 @@ async function analyzeText() {
                 return;
             }
             const wordCount = text.split(/\s+/).filter(Boolean).length;
-            if (wordCount < 10) {
+            if (text.length < 300 || wordCount < 40) {
                 hideLoading();
-                showToast('文本太短，请提供至少 50 个字符', 'error');
+                showToast('文本太短，请提供至少 300 个字符（约 40 个英文单词）', 'error');
                 return;
             }
             const resp = await _csrfFetch('/api/analyze', {

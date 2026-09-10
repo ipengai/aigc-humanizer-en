@@ -469,6 +469,22 @@ class AnalyzeResponseScenarioTests(unittest.TestCase):
         self.assertTrue(data["balance_sufficient"])
         self.assertEqual(data["detection_balance"], 1000)
 
+    def test_analysis_rejects_text_below_huma_minimum_before_detection(self):
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = 7
+
+        import app.extensions as extensions
+        detector = mock.Mock()
+        with mock.patch.object(extensions, "ai_detector", detector):
+            response = self.client.post(
+                "/api/analyze",
+                json={"text": "word " * 40},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("300 个字符", response.get_json()["error"])
+        detector.assert_not_called()
+
 
 class TargetedRewriteIntegrationTests(unittest.TestCase):
     def test_rewrite_and_analyze_records_targeted_progress_and_metadata(self):

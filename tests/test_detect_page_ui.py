@@ -28,6 +28,15 @@ class DetectorPageUiContractTests(unittest.TestCase):
         self.assertIn("submitBtns.forEach(b => b.disabled = false)", recharge_function)
         self.assertIn("if (submitBtn) submitBtn.disabled = false", script)
 
+    def test_primary_navigation_uses_one_label_and_order(self):
+        expected = ["AI Writer", "AI Detector", "使用帮助", "定价"]
+        for filename in ("index.html", "ai_detect.html", "faq.html", "orders.html"):
+            page = (ROOT / "templates" / filename).read_text(encoding="utf-8")
+            nav = page.split('<div class="nav-links">', 1)[1].split('</div>', 1)[0]
+            positions = [nav.index(label) for label in expected]
+            self.assertEqual(positions, sorted(positions), filename)
+            self.assertNotIn("AI改写", nav, filename)
+
 
 if __name__ == "__main__":
     unittest.main()

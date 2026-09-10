@@ -817,7 +817,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         }
         .tab-btn:hover { color: #1e293b; }
         .tab-btn.active { color: #4f46e5; border-bottom-color: #4f46e5; }
-        .main { max-width: 1400px; margin: 0 auto; padding: 24px; }
+        .main { max-width: 1900px; margin: 0 auto; padding: 24px; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
         /* Toolbar */
@@ -884,7 +884,8 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         /* Table */
         .table-wrapper {
             background: #fff; border-radius: 12px;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.04); overflow: hidden;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+            overflow-x: auto; overflow-y: hidden;
         }
         .table-header {
             padding: 16px 20px; display: flex; align-items: center;

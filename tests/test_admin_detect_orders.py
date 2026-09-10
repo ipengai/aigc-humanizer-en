@@ -106,6 +106,11 @@ class AdminDetectionOrderTests(unittest.TestCase):
         self.assertIn('id="content-trends"', template)
         self.assertIn("if (tab === 'trends') loadTrends()", template)
 
+    def test_wide_order_table_is_scrollable_instead_of_clipped(self):
+        template = admin.DASHBOARD_TEMPLATE
+        self.assertIn('max-width: 1900px', template)
+        self.assertIn('overflow-x: auto', template)
+
     def test_admin_users_include_detection_balance(self):
         conn = _database(self.db_path)
         try:

@@ -91,6 +91,8 @@ def create_app():
     # Optional named providers for risk-band routing. Empty values preserve
     # the current single-provider deployment and avoid extra API clients.
     provider_map = {}
+    configured_name = app.config.get('HUMANIZER_ADAPTER', 'rule_based')
+    fallback_name = getattr(project_config, 'HUMANIZER_FALLBACK_ADAPTER', None)
     provider_names = {
         'translation': getattr(project_config, 'REWRITE_TRANSLATION_ADAPTER', ''),
         'huma': getattr(project_config, 'REWRITE_HUMA_ADAPTER', ''),
@@ -98,8 +100,19 @@ def create_app():
     }
     for route_name, provider_name in provider_names.items():
         if provider_name:
-            provider_map[route_name] = create_humanizer(provider_name)
-    configured_name = app.config.get('HUMANIZER_ADAPTER', 'rule_based')
+            # Reuse the configured adapter when a route points to the same
+            # provider. This preserves its fallback chain. An explicitly
+            # configured Huma route also needs that fallback, otherwise short
+            # inputs rejected by the paid API fail instead of using the local
+            # backup adapter.
+            if provider_name == configured_name:
+                provider_map[route_name] = humanizer_adapter
+            elif route_name == 'huma':
+                provider_map[route_name] = create_humanizer(
+                    provider_name, fallback_name
+                )
+            else:
+                provider_map[route_name] = create_humanizer(provider_name)
     if configured_name in (
             'ai_text_humanizer', 'api',
             'ai_text_humanizer_mock', 'api_mock'):

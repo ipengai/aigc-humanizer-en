@@ -15,6 +15,13 @@ DB_DIR = os.path.join(PROJ_ROOT, 'instance')
 DB_PATH = os.path.join(DB_DIR, 'aigc_humanizer.db')
 
 
+def _round_ai_score(value):
+    """Normalize persisted AI percentages without changing routing precision."""
+    if value is None:
+        return None
+    return round(float(value), 1)
+
+
 def get_connection():
     """Get a new SQLite database connection."""
     os.makedirs(DB_DIR, exist_ok=True)
@@ -497,7 +504,7 @@ class Order:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'balance', ?, ?, ?, ?, ?)""",
             (user_id, order_id, original_text, rewritten_text,
              original_format, original_filename, word_count, price, mode,
-             original_score, rewritten_score, word_count,
+             _round_ai_score(original_score), _round_ai_score(rewritten_score), word_count,
              User.get_balance(conn, user_id), rewritten_paragraphs_json,
              created_at, expires_at)
         )
@@ -834,8 +841,8 @@ class Order:
                WHERE order_id = ?""",
             (
                 rewritten_text,
-                rewritten_score,
-                original_score,
+                _round_ai_score(rewritten_score),
+                _round_ai_score(original_score),
                 paragraphs_json,
                 detector_backend,
                 rewrite_metadata.get('humanizer_backend') or humanizer_backend,

@@ -57,8 +57,8 @@ def _create_completed_order(conn, order_id='HUMA-TEST-1'):
         conn,
         order_id,
         'Rewritten body is deliberately longer than before.',
-        rewritten_score=28,
-        original_score=75,
+        rewritten_score=28.0764,
+        original_score=75.049,
         rewritten_paragraphs=[
             {'text': 'Rewritten body is deliberately longer than before.', 'is_heading': False}
         ],
@@ -94,6 +94,8 @@ class RewriteFeedbackTests(unittest.TestCase):
             order = Order.get_by_order_id(conn, 'HUMA-TEST-1')
 
             self.assertEqual(order['status'], 'completed')
+            self.assertEqual(order['original_score'], 75.0)
+            self.assertEqual(order['rewritten_score'], 28.1)
             self.assertEqual(order['humanizer_backend'], 'llm_based')
             self.assertEqual(order['rewrite_method'], 'llm')
             self.assertEqual(order['rewrite_provider'], 'deepseek')
@@ -310,6 +312,35 @@ class RewriteFeedbackTests(unittest.TestCase):
         self.assertEqual(matching_data['orders'][0]['mode'], 'median')
         self.assertEqual(wrong_method.status_code, 200)
         self.assertEqual(wrong_method.get_json()['summary']['total_orders'], 0)
+
+    def test_admin_orders_include_feedback_and_rounded_scores(self):
+        conn = _init_database(self.db_path)
+        try:
+            _create_completed_order(conn)
+            RewriteFeedback.upsert(
+                conn, 1, 'HUMA-TEST-1', ['high_ai_score'],
+                external_score=42.26, comment='Still high', contact_allowed=True,
+            )
+        finally:
+            conn.close()
+
+        with mock.patch.object(admin, 'DB_PATH', str(self.db_path)):
+            admin.admin_app.config.update(TESTING=True)
+            client = admin.admin_app.test_client()
+            with client.session_transaction() as session:
+                session['admin_authenticated'] = True
+            response = client.get(
+                '/admin/api/orders?start=2026-01-01&end=2026-12-31'
+            )
+
+        self.assertEqual(response.status_code, 200)
+        order = response.get_json()['orders'][0]
+        self.assertEqual(order['original_score'], 75.0)
+        self.assertEqual(order['rewritten_score'], 28.1)
+        self.assertTrue(order['has_feedback'])
+        self.assertEqual(order['feedback']['issue_types'], ['high_ai_score'])
+        self.assertEqual(order['feedback']['external_score'], 42.26)
+        self.assertTrue(order['feedback']['contact_allowed'])
 
     def test_feedback_endpoint_saves_structured_report_and_private_screenshot(self):
         conn = _init_database(self.db_path)

@@ -209,10 +209,51 @@ def api_orders():
             params + [per_page, offset]
         )
 
-        orders = []
+        order_rows = cursor.fetchall()
+        feedback_by_order = {}
+        order_ids = [row['order_id'] for row in order_rows]
+        feedback_table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rewrite_feedback'"
+        ).fetchone()
+        if order_ids and feedback_table_exists:
+            placeholders = ','.join('?' for _ in order_ids)
+            feedback_rows = conn.execute(
+                f"SELECT * FROM rewrite_feedback WHERE order_id IN ({placeholders})",
+                order_ids,
+            ).fetchall()
+            for feedback_row in feedback_rows:
+                feedback = dict(feedback_row)
+                issue_types = []
+                if feedback.get('issue_types'):
+                    try:
+                        parsed = json.loads(feedback['issue_types'])
+                        if isinstance(parsed, list):
+                            issue_types = [v for v in parsed if isinstance(v, str)]
+                    except (TypeError, ValueError):
+                        pass
+                if not issue_types and feedback.get('issue_type'):
+                    issue_types = [feedback['issue_type']]
+                feedback['issue_types'] = issue_types
+                feedback['contact_allowed'] = bool(feedback.get('contact_allowed'))
+                feedback['screenshot_url'] = (
+                    url_for('feedback_screenshot', file_key=feedback['screenshot_file_key'])
+                    if feedback.get('screenshot_file_key') else None
+                )
+                feedback_by_order[feedback['order_id']] = feedback
 
-        for row in cursor.fetchall():
+        orders = []
+        for row in order_rows:
             order = dict(row)
+            order['original_score'] = (
+                round(order['original_score'], 1)
+                if order.get('original_score') is not None else None
+            )
+            order['rewritten_score'] = (
+                round(order['rewritten_score'], 1)
+                if order.get('rewritten_score') is not None else None
+            )
+            order['feedback'] = feedback_by_order.get(order['order_id'])
+            order['has_feedback'] = order['feedback'] is not None
             if order.get('original_text'):
                 order['original_text_preview'] = order['original_text'][:200]
             if order.get('rewritten_text'):
@@ -1095,6 +1136,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                         <th>改写方法</th>
                         <th>改写强度</th>
                         <th>AI 率（原→改写）</th>
+                        <th>改写反馈</th>
                         <th>创建时间</th>
                     </tr>
                 </thead>
@@ -1532,6 +1574,11 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             sapling: 'Sapling', originality: 'Originality', rule_based: '本地规则',
             sapling_mock: 'Sapling(测试)', originality_mock: 'Originality(测试)'
         };
+        const FEEDBACK_ISSUE_LABEL = {
+            satisfied: '效果符合预期', high_ai_score: 'AI率仍高',
+            content_disorder: '内容/结构错乱', meaning_changed: '原意改变',
+            details_lost: '标题/数据/术语丢失', other: '其他问题'
+        };
         function modeLabel(m) { return MODE_LABEL[m] || m || '未知'; }
         function rewriteMethodLabel(method) {
             return REWRITE_METHOD_LABEL[method] || method || '未知';
@@ -1545,11 +1592,20 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         }
         function aiRateCell(o) {
             if (o.original_score == null && o.rewritten_score == null) return '-';
-            const orig = o.original_score != null ? o.original_score + '%' : '-';
-            const rew = o.rewritten_score != null ? o.rewritten_score + '%' : '-';
+            const orig = o.original_score != null ? Number(o.original_score).toFixed(1) + '%' : '-';
+            const rew = o.rewritten_score != null ? Number(o.rewritten_score).toFixed(1) + '%' : '-';
             const color = rew !== '-' && parseFloat(rew) < 20 ? '#059669' : '';
             const style = 'font-size:0.82rem;white-space:nowrap;' + (color ? 'color:' + color + ';' : '');
             return `<span style="${style}">${orig} → ${rew}</span>`;
+        }
+
+        function feedbackCell(o) {
+            if (!o.feedback) return '<span style="color:#94a3b8;">未反馈</span>';
+            const issues = (o.feedback.issue_types || [])
+                .map(key => FEEDBACK_ISSUE_LABEL[key] || key).join('、');
+            const score = o.feedback.external_score == null
+                ? '' : ` · 实测 ${Number(o.feedback.external_score).toFixed(1)}%`;
+            return `<span class="badge badge-paid">${escapeHtml(issues || '已反馈')}${score}</span>`;
         }
 
         function fmtDate(d) {
@@ -1706,10 +1762,11 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                     <td>${escapeHtml(rewriteMethodLabel(o.rewrite_method))}</td>
                     <td>${escapeHtml(modeLabel(o.mode))}</td>
                     <td>${aiRateCell(o)}</td>
+                    <td style="font-size:0.78rem;">${feedbackCell(o)}</td>
                     <td style="font-size:0.78rem;color:#64748b;">${formatTime(o.created_at)}</td>
                 </tr>`;
                 html += `<tr class="row-detail" id="detail-${escapeHtml(o.order_id)}" style="display:none;">
-                    <td colspan="13">
+                    <td colspan="14">
                         <div class="detail-meta">
                             <span>文件: ${escapeHtml(o.original_filename || '-')}</span>
                             <span>改写方法: ${escapeHtml(rewriteMethodLabel(o.rewrite_method))}</span>
@@ -1735,8 +1792,13 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                             <span>改写后词数: ${o.rewritten_word_count || '-'}</span>
                             <span>篇幅变化: ${o.word_count_change_ratio == null ? '-' : (o.word_count_change_ratio * 100).toFixed(1) + '%'}</span>
                             <span>标题结构: ${o.heading_count_changed ? '⚠️ 数量变化' : '正常'}</span>
-                            <span>原始评分: ${o.original_score != null ? o.original_score + '%' : '-'}</span>
-                            <span>改写评分: ${o.rewritten_score != null ? o.rewritten_score + '%' : '-'}</span>
+                            <span>原始评分: ${o.original_score != null ? Number(o.original_score).toFixed(1) + '%' : '-'}</span>
+                            <span>改写评分: ${o.rewritten_score != null ? Number(o.rewritten_score).toFixed(1) + '%' : '-'}</span>
+                            <span>用户反馈: ${o.feedback ? escapeHtml((o.feedback.issue_types || []).map(key => FEEDBACK_ISSUE_LABEL[key] || key).join('、') || '已反馈') : '未反馈'}</span>
+                            <span>外部实测 AI 率: ${o.feedback && o.feedback.external_score != null ? Number(o.feedback.external_score).toFixed(1) + '%' : '-'}</span>
+                            <span>反馈说明: ${o.feedback ? escapeHtml(o.feedback.comment || '-') : '-'}</span>
+                            <span>允许联系: ${o.feedback && o.feedback.contact_allowed ? '是' : '否'}</span>
+                            ${o.feedback && o.feedback.screenshot_url ? `<span><a href="${escapeHtml(o.feedback.screenshot_url)}" target="_blank" onclick="event.stopPropagation()">查看反馈截图</a></span>` : ''}
                             <span>支付时间: ${o.paid_at ? formatTime(o.paid_at) : '-'}</span>
                             <span>交易号: ${escapeHtml(o.alipay_trade_no || '-')}</span>
                         </div>

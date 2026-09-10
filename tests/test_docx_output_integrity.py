@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from docx import Document
 from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 from app.helpers.docx_renderer import (
     _replace_paragraph_range,
@@ -34,6 +35,18 @@ class DocxOutputIntegrityTests(unittest.TestCase):
 
         self.assertEqual(paragraph.text, "New uninterrupted content")
         self.assertFalse(paragraph._p.xpath(".//w:tab"))
+
+    def test_replacing_text_preserves_spaces_created_at_run_boundaries(self):
+        document = Document()
+        paragraph = document.add_paragraph()
+        paragraph.add_run("in")
+        paragraph.add_run(" likes")
+
+        _replace_paragraph_text(paragraph._p, "in likes")
+
+        text_nodes = paragraph._p.xpath(".//w:t")
+        self.assertEqual(text_nodes[1].text, " likes")
+        self.assertEqual(text_nodes[1].get(qn("xml:space")), "preserve")
 
     def test_renderer_rejects_paragraph_count_mismatch(self):
         document = Document()

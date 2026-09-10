@@ -12,6 +12,10 @@ from app.helpers.segmenter import (
     segment as segment_paragraphs,
     _is_heading,
 )
+from app.humanizer.docx_alignment import (
+    align_docx_output,
+    is_alignment_protected,
+)
 from app.humanizer.events import REWRITE_FALLBACK_EVENT
 
 logger = logging.getLogger("app.humanizer")
@@ -411,11 +415,36 @@ class HumanizerAdapter(ABC):
                     item["source_body_indexes"] = [para["body_index"]]
                 structured.append(item)
 
-            # DOCX must retain a one-to-one paragraph map. Besides making the
-            # renderer safe, paragraph-level structured items let a later Huma
-            # upgrade re-segment the translated text without losing body_index
-            # or accidentally treating headings as body text.
+            # Huma may merge/split paragraphs or omit a short structural label.
+            # Align that variable output back to the stable Word paragraph
+            # slots before rendering. The existing one-to-one renderer remains
+            # the final safety boundary; uncertain alignment uses the existing
+            # per-region fallback below.
             if source_format == "docx":
+                alignment = align_docx_output(source_paragraphs, out_segments)
+                if alignment is not None:
+                    restored = []
+                    for aligned in alignment.paragraphs:
+                        restored.append(aligned.text)
+                        append_aligned(
+                            aligned.source,
+                            aligned.text,
+                            aligned.was_rewritten,
+                        )
+                    parts.append("\n\n".join(restored))
+                    if (
+                        len(out_segments) != len(source_paragraphs)
+                        or any(op != "1_to_1" for op in alignment.operations)
+                    ):
+                        logger.info(
+                            "rewrite action=docx_structure_aligned expected=%d "
+                            "actual=%d confidence=%.3f operations=%s",
+                            len(source_paragraphs), len(out_segments),
+                            alignment.confidence,
+                            ",".join(alignment.operations),
+                        )
+                    return
+
                 if len(out_segments) != len(source_paragraphs):
                     logger.warning(
                         "rewrite action=docx_structure_fallback blocks=1 "
@@ -426,7 +455,7 @@ class HumanizerAdapter(ABC):
                         original = (para.get("text") or "").strip()
                         if not original:
                             continue
-                        if _is_heading(para):
+                        if is_alignment_protected(para):
                             parts.append(original)
                             append_aligned(para, original, False)
                             continue
@@ -463,9 +492,12 @@ class HumanizerAdapter(ABC):
                         append_aligned(para, normalized, True)
                     return
 
+                # Equal cardinality with uncertain semantic alignment keeps
+                # the established positional behavior. Structural labels are
+                # still restored, so Huma cannot alter document anchors.
                 restored = []
                 for para, segment in zip(source_paragraphs, out_segments):
-                    if _is_heading(para):
+                    if is_alignment_protected(para):
                         value = (para.get("text") or "").strip()
                         restored.append(value)
                         append_aligned(para, value, False)

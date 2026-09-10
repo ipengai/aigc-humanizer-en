@@ -18,6 +18,18 @@ def _replace_paragraph_text(paragraph_element, rewritten_text):
     """Redistribute text across existing runs while preserving run properties."""
     from docx.oxml.ns import qn
 
+    def assign_text(node, value):
+        node.text = value
+        # OOXML collapses leading/trailing whitespace unless xml:space is
+        # explicitly preserved. Redistribution frequently creates a run that
+        # begins with a space; without this marker Word renders ``in likes`` as
+        # ``inlikes`` even though python-docx reads the logical text correctly.
+        space_key = qn('xml:space')
+        if value[:1].isspace() or value[-1:].isspace():
+            node.set(space_key, 'preserve')
+        else:
+            node.attrib.pop(space_key, None)
+
     # Tabs and explicit line breaks belong to the old text layout. Leaving them
     # in place after redistributing new text can split a word in the middle
     # (for example ``do\tminate``). Rewritten paragraphs are plain text, so
@@ -35,7 +47,7 @@ def _replace_paragraph_text(paragraph_element, rewritten_text):
     original_lengths = [len(node.text or '') for node in text_nodes]
     total_original = sum(original_lengths)
     if total_original <= 0:
-        text_nodes[0].text = rewritten_text
+        assign_text(text_nodes[0], rewritten_text)
         return True
 
     cursor = 0
@@ -43,11 +55,11 @@ def _replace_paragraph_text(paragraph_element, rewritten_text):
     total_new = len(rewritten_text)
     for index, node in enumerate(text_nodes):
         if index == len(text_nodes) - 1:
-            node.text = rewritten_text[cursor:]
+            assign_text(node, rewritten_text[cursor:])
             break
         cumulative += original_lengths[index]
         boundary = round(total_new * cumulative / total_original)
-        node.text = rewritten_text[cursor:boundary]
+        assign_text(node, rewritten_text[cursor:boundary])
         cursor = boundary
     return True
 

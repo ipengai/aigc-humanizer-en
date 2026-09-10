@@ -165,6 +165,41 @@ class BlockFailoverTests(unittest.TestCase):
         self.assertEqual(structured[0]["text"].count("primary:"), 1)
         self.assertEqual(structured[2]["text"].count("primary:"), 1)
 
+    def test_docx_structure_fallback_preserves_too_short_body_without_failing(self):
+        class RejectShortCollapsingProvider(ParagraphBatchStub):
+            def humanize(self, text, mode=None, paragraphs=None):
+                self.calls.append(text)
+                if len(text.strip()) < 300:
+                    raise RuntimeError("upstream rejects short input")
+                if "\n\n" in text:
+                    return "collapsed aggregate output"
+                return f"primary:{text}"
+
+        primary = RejectShortCollapsingProvider("primary")
+        humanizer = FailoverHumanizer(primary, StubHumanizer("fallback"))
+        paragraphs = [
+            {
+                "text": "Long paragraph " + ("evidence " * 40),
+                "source_format": "docx", "body_index": 0,
+                "style": "Normal", "was_rewritten": True,
+            },
+            {
+                "text": "Short translated paragraph.",
+                "source_format": "docx", "body_index": 1,
+                "style": "Normal", "was_rewritten": True,
+            },
+        ]
+
+        output, structured = humanizer.humanize_structured(
+            "ignored", mode="median", paragraphs=paragraphs,
+        )
+
+        self.assertIn("primary:Long paragraph", output)
+        self.assertIn("Short translated paragraph.", output)
+        self.assertEqual(len(primary.calls), 2)
+        self.assertEqual(len(structured), 2)
+        self.assertTrue(structured[1]["was_rewritten"])
+
 
 if __name__ == "__main__":
     unittest.main()

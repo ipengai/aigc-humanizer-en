@@ -221,6 +221,35 @@ class PipelineScenarioTests(unittest.TestCase):
             for step in result["steps"]
         ))
 
+    def test_translation_fallback_attempt_does_not_skip_required_huma_upgrade(self):
+        huma = _Provider("huma")
+
+        class FailingTranslation(_Provider):
+            def humanize(self, text, mode=None, paragraphs=None):
+                self.calls.append(("block", text, mode))
+                raise RuntimeError("translation markers were lost")
+
+        translation = FailingTranslation("translation")
+
+        def detect(text, stage=None):
+            self.assertEqual(stage, "route_document_recheck")
+            return {"backend": "v2", "risk_percent": 55, "coverage": 1}
+
+        text = "source " + ("word " * 80)
+        result = RewriteOrchestrator(
+            huma, detect, providers={"huma": huma, "translation": translation}
+        ).run(
+            text, mode="median", paragraphs=[{"text": text}],
+            original_analysis={"backend": "v2", "risk_percent": 30, "coverage": 1},
+            policy="risk_band_segmented",
+        )
+
+        # One Huma call is the translation fallback; the second is the
+        # mandatory post-recheck upgrade.  The old skip logic made only one.
+        block_calls = [call for call in huma.calls if call[0] == "block"]
+        self.assertEqual(len(block_calls), 2)
+        self.assertEqual(result["steps"][0]["status"], "upgraded_after_recheck")
+
     def test_real_v2_joins_documents_made_of_short_paragraphs(self):
         paragraph = (
             "Writers compare evidence and explain the limits of each claim "

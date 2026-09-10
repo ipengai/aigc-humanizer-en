@@ -430,6 +430,23 @@ class HumanizerAdapter(ABC):
                             parts.append(original)
                             append_aligned(para, original, False)
                             continue
+                        if min_chars > 0 and len(original) < min_chars:
+                            # The aggregate result cannot be mapped safely and
+                            # the upstream API rejects this paragraph on its
+                            # own.  Keep the incoming text (which may already
+                            # be the Lynote result) instead of turning a
+                            # successful document rewrite into a failed order.
+                            logger.info(
+                                "rewrite action=docx_short_preserved "
+                                "chars=%d min_chars=%d",
+                                len(original), min_chars,
+                            )
+                            parts.append(original)
+                            append_aligned(
+                                para, original,
+                                bool(para.get("was_rewritten")),
+                            )
+                            continue
                         single_task = {
                             "text": original,
                             "paragraphs": [para],

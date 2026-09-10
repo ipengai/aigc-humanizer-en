@@ -169,14 +169,14 @@ class RewriteOrchestrator:
                     huma = self._provider("huma")
                     if huma is None:
                         raise RuntimeError("翻译复检仍为高风险，但未配置 huma 改写器")
-                    already_huma = {
-                        index + 1 for index, step in enumerate(steps)
-                        if step.get("action") == "huma"
-                    }
+                    # Always apply the required document-level Huma upgrade.
+                    # A translation exception may have tried Huma only for an
+                    # intermediate aggregate whose output was later discarded
+                    # by the DOCX structure fallback.  Treating that attempt as
+                    # a completed block caused the real upgrade to be skipped.
                     humanized, structured, huma_steps = self._run_segmented_provider(
                         huma, "huma", mode, structured, progress_cb,
                         document_analysis=recheck,
-                        skip_indexes=already_huma,
                     )
                     for index, step in enumerate(steps):
                         step["score_after"] = _score(recheck)

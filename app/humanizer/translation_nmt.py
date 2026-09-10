@@ -110,7 +110,20 @@ def baidu_translate(text, src, dst, retries=3):
                     raise RuntimeError(
                         f"百度API {data['error_code']}: {data.get('error_msg')}"
                     )
-                out.append(data["trans_result"][0]["dst"])
+                # Baidu returns one ``trans_result`` item per input line when
+                # ``q`` contains newlines.  Keeping only the first item drops
+                # paragraph markers and makes the DOCX structure guard retry
+                # every paragraph separately.  Preserve every returned line
+                # so Lynote's batch markers survive the round trip.
+                translated_lines = [
+                    item.get("dst", "")
+                    for item in data.get("trans_result", [])
+                ]
+                if not translated_lines or any(
+                    not value for value in translated_lines
+                ):
+                    raise RuntimeError("百度API返回了空翻译结果")
+                out.append("\n".join(translated_lines))
                 last_err = None
                 break
             except Exception as exc:  # noqa: BLE001

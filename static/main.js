@@ -140,14 +140,25 @@ async function analyzeText() {
 }
 
 function showInputValidationModal(message) {
-    showDetailModal(`
-        <div style="text-align:center;">
-            <div class="modal-icon">⚠️</div>
-            <h3 class="modal-title" style="margin-bottom:12px;">暂时无法开始改写</h3>
-            <p style="color:var(--gray-600);line-height:1.7;margin-bottom:24px;">${escapeHtml(message)}</p>
-            <button class="btn btn-primary btn-full" type="button" onclick="closeDetailModal()">返回继续输入</button>
+    closeDetailModal();
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.id = 'detail-modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.innerHTML = `
+        <div class="modal" style="max-width:420px;">
+            <button class="modal-close" type="button" onclick="closeDetailModal()" aria-label="关闭提示">&times;</button>
+            <div class="modal-body" style="padding:28px 32px 24px;text-align:center;">
+                <p style="color:var(--gray-700);line-height:1.65;margin:4px 20px 20px;">⚠️ ${escapeHtml(message)}</p>
+                <button class="btn btn-primary" style="min-width:120px;" type="button" onclick="closeDetailModal()">继续输入</button>
+            </div>
         </div>
-    `);
+    `;
+    overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) closeDetailModal();
+    });
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
 }
 
 async function handleAnalyzeResponse(data) {

@@ -47,7 +47,9 @@ class DetectorPageUiContractTests(unittest.TestCase):
             analyze.index("showInputValidationModal"),
             analyze.index("showLoading()"),
         )
-        self.assertIn("返回继续输入", script)
+        self.assertIn("继续输入", script)
+        self.assertIn("max-width:420px", script)
+        self.assertNotIn("暂时无法开始改写", script)
 
 
 if __name__ == "__main__":

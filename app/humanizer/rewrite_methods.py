@@ -17,7 +17,10 @@ import time
 import requests
 
 from app.humanizer.adapter import HumanizerAdapter, _cfg
-from app.humanizer.translation_nmt import translate as nmt_translate
+from app.humanizer.translation_nmt import (
+    translate as nmt_translate,
+    translate_many as nmt_translate_many,
+)
 
 logger = logging.getLogger("app.humanizer.rewrite_methods")
 
@@ -137,30 +140,14 @@ class LynoteTranslationHumanizer(_RewriteMethodMixin, HumanizerAdapter):
             batches.append(current)
         return batches
 
-    @staticmethod
-    def _separator(index):
-        return f"[[ZXQ_{index:06d}_QXZ]]"
-
     def _translate_batch(self, paragraphs, offset):
-        separators = [
-            self._separator(offset + index)
-            for index in range(len(paragraphs) - 1)
-        ]
-        tagged = paragraphs[0]
-        for separator, paragraph in zip(separators, paragraphs[1:]):
-            tagged += f"\n{separator}\n{paragraph}"
-        zh, engine1 = nmt_translate(tagged, "en", "zh")
-        en, engine2 = nmt_translate(zh, "zh", "en")
-        values = [en]
-        for separator in separators:
-            next_values = []
-            for value in values:
-                next_values.extend(value.split(separator))
-            values = next_values
+        del offset  # retained in the signature for compatibility with callers
+        zh_values, engine1 = nmt_translate_many(paragraphs, "en", "zh")
+        values, engine2 = nmt_translate_many(zh_values, "zh", "en")
         values = [value.strip() for value in values]
         if len(values) != len(paragraphs) or any(not value for value in values):
             raise RuntimeError(
-                "NMT paragraph markers were not preserved; upgrade this block to Huma"
+                "NMT paragraph boundaries were not preserved; upgrade this block to Huma"
             )
         return values, engine1, engine2
 

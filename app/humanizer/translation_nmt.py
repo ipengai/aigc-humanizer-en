@@ -235,3 +235,45 @@ def translate(text, src, dst):
         except Exception as exc2:  # noqa: BLE001
             logger.warning("阿里云翻译失败，切换 Google 兜底: %s", exc2)
             return google_translate(text, src, dst), "google"
+
+
+def translate_many(texts, src, dst):
+    """Translate multiple paragraphs while preserving their cardinality.
+
+    Baidu already returns one ``trans_result`` entry per input line.  Joining
+    paragraphs with newlines therefore preserves boundaries more reliably
+    than asking the translation model to echo artificial marker tokens, which
+    it may alter according to the surrounding prose.
+    """
+    values = list(texts or [])
+    if not values:
+        return [], "baidu"
+    if any("\n" in value or "\r" in value for value in values):
+        # A Word paragraph normally has no hard newline.  Handle unusual input
+        # independently rather than confusing input lines with paragraph rows.
+        translated = []
+        engines = []
+        for value in values:
+            output, engine = translate(value, src, dst)
+            translated.append(output)
+            engines.append(engine)
+        return translated, "+".join(sorted(set(engines)))
+
+    try:
+        output = baidu_translate("\n".join(values), src, dst)
+        translated = output.splitlines()
+        if len(translated) != len(values) or any(not item.strip() for item in translated):
+            raise RuntimeError(
+                "百度批量翻译段落数不一致: "
+                f"expected={len(values)} actual={len(translated)}"
+            )
+        return translated, "baidu"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("百度批量翻译失败，逐段使用统一兜底链: %s", exc)
+        translated = []
+        engines = []
+        for value in values:
+            output, engine = translate(value, src, dst)
+            translated.append(output)
+            engines.append(engine)
+        return translated, "+".join(sorted(set(engines)))

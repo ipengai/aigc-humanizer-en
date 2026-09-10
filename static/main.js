@@ -94,6 +94,24 @@ if (analyzeBtn) {
 async function analyzeText() {
     // Baidu Tongji: track analysis start
     if (typeof _hmt !== 'undefined') _hmt.push(['_trackEvent', 'engagement', 'analyze_start']);
+
+    // 粘贴文本先在首页完成校验。不要先切换到加载区，否则错误提示会
+    // 落在当前视口之外，用户容易误以为按钮没有响应。
+    if (!uploadedFile) {
+        const pastedText = textInput ? textInput.value.trim() : '';
+        if (!pastedText) {
+            showInputValidationModal('请上传文档或粘贴英文文本');
+            return;
+        }
+        const pastedWordCount = pastedText.split(/\s+/).filter(Boolean).length;
+        if (pastedText.length < 300 || pastedWordCount < 40) {
+            showInputValidationModal(
+                '文本太短，请提供至少 300 个字符（约 40 个英文单词）'
+            );
+            return;
+        }
+    }
+
     showLoading();
 
     try {
@@ -106,17 +124,6 @@ async function analyzeText() {
             await handleAnalyzeResponse(data);
         } else {
             const text = textInput.value.trim();
-            if (!text) {
-                hideLoading();
-                showToast('请上传文档或粘贴英文文本', 'error');
-                return;
-            }
-            const wordCount = text.split(/\s+/).filter(Boolean).length;
-            if (text.length < 300 || wordCount < 40) {
-                hideLoading();
-                showToast('文本太短，请提供至少 300 个字符（约 40 个英文单词）', 'error');
-                return;
-            }
             const resp = await _csrfFetch('/api/analyze', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -130,6 +137,17 @@ async function analyzeText() {
         showToast(getNetworkErrorMessage(err), 'error');
         console.error('分析出错:', err);
     }
+}
+
+function showInputValidationModal(message) {
+    showDetailModal(`
+        <div style="text-align:center;">
+            <div class="modal-icon">⚠️</div>
+            <h3 class="modal-title" style="margin-bottom:12px;">暂时无法开始改写</h3>
+            <p style="color:var(--gray-600);line-height:1.7;margin-bottom:24px;">${escapeHtml(message)}</p>
+            <button class="btn btn-primary btn-full" type="button" onclick="closeDetailModal()">返回继续输入</button>
+        </div>
+    `);
 }
 
 async function handleAnalyzeResponse(data) {

@@ -37,6 +37,18 @@ class DetectorPageUiContractTests(unittest.TestCase):
             self.assertEqual(positions, sorted(positions), filename)
             self.assertNotIn("AI改写", nav, filename)
 
+    def test_short_pasted_text_shows_modal_before_loading_view(self):
+        script = (ROOT / "static" / "main.js").read_text(encoding="utf-8")
+        analyze = script.split("async function analyzeText()", 1)[1].split(
+            "async function handleAnalyzeResponse", 1
+        )[0]
+        self.assertIn("showInputValidationModal", analyze)
+        self.assertLess(
+            analyze.index("showInputValidationModal"),
+            analyze.index("showLoading()"),
+        )
+        self.assertIn("返回继续输入", script)
+
 
 if __name__ == "__main__":
     unittest.main()

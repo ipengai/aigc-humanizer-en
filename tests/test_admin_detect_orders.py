@@ -167,6 +167,14 @@ class AdminDetectionOrderTests(unittest.TestCase):
     def test_dashboard_shows_active_days_column(self):
         self.assertIn('<th>活跃天数</th>', admin.DASHBOARD_TEMPLATE)
 
+    def test_dashboard_explains_hybrid_route_steps(self):
+        template = admin.DASHBOARD_TEMPLATE
+        self.assertIn('function rewriteRouteSummary(order)', template)
+        self.assertIn('混合明细:', template)
+        self.assertIn('step.rewrite_backends', template)
+        self.assertIn('targetedBackends', template)
+        self.assertIn('定向二改：${targetedBackends}', template)
+
 
 if __name__ == "__main__":
     unittest.main()

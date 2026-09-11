@@ -1606,6 +1606,39 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
         function rewriteMethodLabel(method) {
             return REWRITE_METHOD_LABEL[method] || method || '未知';
         }
+        function rewriteRouteSummary(order) {
+            let trace = order.rewrite_route_trace;
+            if (!trace) return order.humanizer_backend || '-';
+            try {
+                if (typeof trace === 'string') trace = JSON.parse(trace);
+            } catch (_) {
+                return order.humanizer_backend || '-';
+            }
+            const steps = Array.isArray(trace?.steps) ? trace.steps : [];
+            const firstPass = steps.filter(step => step.scope === 'block');
+            const combinations = {};
+            firstPass.forEach(step => {
+                const backends = (step.rewrite_backends || [step.rewrite_backend])
+                    .filter(Boolean);
+                const label = backends.join(' → ') || step.action || 'protect';
+                combinations[label] = (combinations[label] || 0) + 1;
+            });
+            const parts = [];
+            if (firstPass.length) {
+                parts.push('首轮：' + Object.entries(combinations)
+                    .map(([label, count]) => `${label}（${count}块）`).join('，'));
+            }
+            const targeted = steps.filter(step => step.scope === 'targeted_batch');
+            if (targeted.length) {
+                const accepted = targeted.filter(step => step.status === 'accepted').length;
+                const reverted = targeted.length - accepted;
+                const targetedBackends = [...new Set(targeted
+                    .flatMap(step => step.rewrite_backends || [step.rewrite_backend])
+                    .filter(Boolean))].join(' → ') || 'llm';
+                parts.push(`定向二改：${targetedBackends} ${targeted.length}轮（采用${accepted}，回退${reverted}）`);
+            }
+            return parts.join('；') || order.humanizer_backend || '-';
+        }
         function detectorLabel(d) { return DETECTOR_LABEL[d] || d || '未知'; }
         function inputSourceLabel(order) {
             const input = order.input_type === 'upload' ? '上传' :
@@ -1796,6 +1829,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                             <span>改写强度: ${escapeHtml(modeLabel(o.mode))}</span>
                             <span>检测方法: ${detectorLabel(o.detector_backend)}</span>
                             <span>实际链路: ${escapeHtml(o.humanizer_backend || '-')}</span>
+                            ${o.rewrite_method === 'hybrid' ? `<span>混合明细: ${escapeHtml(rewriteRouteSummary(o))}</span>` : ''}
                             <span>主引擎: ${escapeHtml(o.humanizer_primary || '-')}</span>
                             <span>备用引擎: ${escapeHtml(o.humanizer_fallback || '-')}</span>
                             <span>Provider / 模型: ${escapeHtml([o.rewrite_provider, o.rewrite_model].filter(Boolean).join(' / ') || '-')}</span>

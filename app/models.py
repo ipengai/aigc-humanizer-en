@@ -681,6 +681,22 @@ class Order:
         conn.commit()
 
     @classmethod
+    def supersede_pending_payment(cls, conn, order_id, user_id):
+        """Expire a user's previous unpaid rewrite order after a new QR exists."""
+        cursor = conn.execute(
+            """UPDATE orders
+               SET payment_status = 'expired', status = 'expired',
+                   failure_stage = 'payment',
+                   failure_code = 'payment_option_changed'
+               WHERE order_id = ? AND user_id = ?
+                 AND payment_status = 'pending' AND status = 'pending'
+                 AND COALESCE(order_type, 'recharge') = 'recharge'""",
+            (order_id, user_id),
+        )
+        conn.commit()
+        return cursor.rowcount == 1
+
+    @classmethod
     def create_product_order(cls, conn, order_id, sku, price, access_token,
                              expires_minutes=15):
         """

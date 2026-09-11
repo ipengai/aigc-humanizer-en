@@ -573,8 +573,21 @@ def api_users():
             where_clause = 'WHERE u.email LIKE ?'
             params = [f'%{search}%']
 
-        # Per-user aggregation: balance + total recharge + total spent (in words)
+        # Per-user aggregation. Active days are distinct Beijing calendar days
+        # with an actual rewrite or AI-detection consumption ledger entry.
         sql = f'''
+            WITH activity_days AS (
+                SELECT DISTINCT
+                    user_id,
+                    date(datetime(substr(created_at, 1, 19), '+8 hours')) AS active_day
+                FROM balance_transactions
+                WHERE transaction_type IN ('rewrite_consumption', 'detection_consumption')
+            ),
+            activity_counts AS (
+                SELECT user_id, COUNT(*) AS active_days
+                FROM activity_days
+                GROUP BY user_id
+            )
             SELECT
                 u.id, u.email, u.word_balance,
                 u.detection_free_words, u.detection_paid_words,
@@ -584,9 +597,11 @@ def api_users():
                 COALESCE(SUM(CASE WHEN bt.transaction_type = 'payment_recharge' THEN bt.words ELSE 0 END), 0) AS total_recharged,
                 COALESCE(SUM(CASE WHEN bt.transaction_type = 'rewrite_consumption' THEN ABS(bt.words) ELSE 0 END), 0) AS total_spent,
                 (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id) AS order_count,
-                (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id AND o.payment_status = 'paid') AS paid_count
+                (SELECT COUNT(*) FROM orders o WHERE o.user_id = u.id AND o.payment_status = 'paid') AS paid_count,
+                COALESCE(ac.active_days, 0) AS active_days
             FROM users u
             LEFT JOIN balance_transactions bt ON bt.user_id = u.id
+            LEFT JOIN activity_counts ac ON ac.user_id = u.id
             {where_clause}
             GROUP BY u.id
             ORDER BY u.id DESC
@@ -1525,6 +1540,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                         <th>累计消费</th>
                         <th>订单数</th>
                         <th>扫码支付订单</th>
+                        <th>活跃天数</th>
                         <th>注册时间</th>
                         <th>最后登录</th>
                     </tr>
@@ -2282,7 +2298,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             // Table
             const tbody = document.getElementById('users-tbody');
             if (data.users.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:40px;color:#94a3b8;">暂无用户</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:40px;color:#94a3b8;">暂无用户</td></tr>';
                 return;
             }
             tbody.innerHTML = data.users.map(u => {
@@ -2297,6 +2313,7 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
                     <td style="color:#ca8a04;">-${(u.total_spent || 0).toLocaleString()}</td>
                     <td>${u.order_count}</td>
                     <td>${u.paid_count}</td>
+                    <td>${Number(u.active_days || 0).toLocaleString()}</td>
                     <td style="font-size:0.78rem;color:#64748b;">${formatTime(u.created_at)}</td>
                     <td style="font-size:0.78rem;color:#64748b;">${u.last_login_at ? formatTime(u.last_login_at) : '<span style="color:#cbd5e1;">从未登录</span>'}</td>
                 </tr>`;

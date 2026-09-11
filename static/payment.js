@@ -132,6 +132,7 @@ function renderPaymentQR(order, wordCount, price) {
     // ★ P1: 将 mode 存入 data 属性，供 refreshQRCode 读取
     qrSection.dataset.payMode = order.mode || 'median';
     qrSection.dataset.rechargeWords = order.recharge_words || 0;
+    qrSection.dataset.orderId = order.order_id || '';
     // Reset poll status
     document.getElementById('poll-status').innerHTML = '⏳ 等待支付中...';
     document.getElementById('poll-timer').textContent = '';
@@ -291,9 +292,10 @@ async function changeRechargePackage(rechargeWords) {
     const qrSection = document.getElementById('payment-qr-section');
     const wordCount = parseInt(document.getElementById('pay-word-count').textContent.replace(/[^0-9]/g, ''));
     const mode = qrSection ? (qrSection.dataset.payMode || 'median') : 'median';
+    const supersedesOrderId = qrSection ? (qrSection.dataset.orderId || null) : null;
     if (Number(qrSection?.dataset.rechargeWords || 0) === rechargeWords) return;
     showQRLoading();
-    await createPaymentOrder(wordCount, null, mode, rechargeWords);
+    await createPaymentOrder(wordCount, null, mode, rechargeWords, supersedesOrderId);
 }
 
 async function refreshQRCode() {
@@ -309,8 +311,9 @@ async function refreshQRCode() {
         const qrSection = document.getElementById('payment-qr-section');
         const payMode = qrSection ? (qrSection.dataset.payMode || 'median') : 'median';
         const rechargeWords = Number(qrSection?.dataset.rechargeWords || 0) || null;
+        const supersedesOrderId = qrSection?.dataset.orderId || null;
 
-        await createPaymentOrder(wordCount, null, payMode, rechargeWords);
+        await createPaymentOrder(wordCount, null, payMode, rechargeWords, supersedesOrderId);
 
         showToast('二维码已刷新', 'success');
     } catch (err) {
@@ -474,7 +477,7 @@ function resumePendingPayment() {
     return true;
 }
 
-async function createPaymentOrder(wordCount, price, mode = 'median', rechargeWords = null) {
+async function createPaymentOrder(wordCount, price, mode = 'median', rechargeWords = null, supersedesOrderId = null) {
     // Check login first
     if (!currentUser) {
         savePendingPayment(wordCount, price, mode, rechargeWords);
@@ -497,7 +500,8 @@ async function createPaymentOrder(wordCount, price, mode = 'median', rechargeWor
             body: JSON.stringify({
                 text,
                 mode: mode || 'median',
-                recharge_words: rechargeWords
+                recharge_words: rechargeWords,
+                supersedes_order_id: supersedesOrderId
             })
         });
         const data = await resp.json();

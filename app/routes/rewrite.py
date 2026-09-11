@@ -47,6 +47,11 @@ def api_rewrite():
         return jsonify({"error": "没有可改写的文本，请先分析"}), 400
 
     word_count = len(text.split())
+    if len(text.strip()) < 300 or word_count < 40:
+        return jsonify({
+            "error": "文本太短，请提供至少 300 个字符（约 40 个英文单词）",
+            "error_code": "rewrite_input_too_short",
+        }), 400
     charge_words = word_count
     from app.helpers.tasks import get_cached_original_analysis
     import config as project_config

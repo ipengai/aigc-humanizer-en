@@ -135,6 +135,38 @@ class AdminDetectionOrderTests(unittest.TestCase):
         self.assertEqual(user["detection_paid_words"], 2000)
         self.assertEqual(user["detection_balance"], 2477)
 
+    def test_admin_users_count_unique_beijing_consumption_days(self):
+        conn = _database(self.db_path)
+        try:
+            rows = [
+                ('rewrite_consumption', -50, 950, '2026-09-09T15:30:00+00:00'),
+                ('detection_consumption', -40, 910, '2026-09-09T16:30:00+00:00'),
+                ('rewrite_consumption', -20, 890, '2026-09-10T03:00:00+00:00'),
+                ('payment_recharge', 1000, 1890, '2026-09-11T03:00:00+00:00'),
+            ]
+            conn.executemany(
+                """INSERT INTO balance_transactions
+                   (user_id, transaction_type, words, balance_after, created_at)
+                   VALUES (1, ?, ?, ?, ?)""",
+                rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with mock.patch.object(admin, "DB_PATH", str(self.db_path)):
+            admin.admin_app.config.update(TESTING=True)
+            client = admin.admin_app.test_client()
+            with client.session_transaction() as session:
+                session["admin_authenticated"] = True
+            response = client.get("/admin/api/users")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["users"][0]["active_days"], 2)
+
+    def test_dashboard_shows_active_days_column(self):
+        self.assertIn('<th>活跃天数</th>', admin.DASHBOARD_TEMPLATE)
+
 
 if __name__ == "__main__":
     unittest.main()

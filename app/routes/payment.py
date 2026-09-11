@@ -60,9 +60,20 @@ def api_create_payment():
 
     word_count = len(text.split())
     user_id = session.get('user_id')
+    raw_supersedes_order_id = data.get('supersedes_order_id')
+    supersedes_order_id = (
+        raw_supersedes_order_id.strip()
+        if isinstance(raw_supersedes_order_id, str) else ''
+    )
     conn = get_db()
     balance = User.get_balance(conn, user_id)
     shortfall = max(word_count - balance, 0)
+
+    if len(text.strip()) < 300 or word_count < 40:
+        return jsonify({
+            "error": "文本太短，请提供至少 300 个字符（约 40 个英文单词）",
+            "error_code": "rewrite_input_too_short",
+        }), 400
 
     if shortfall == 0:
         return jsonify({
@@ -154,6 +165,17 @@ def api_create_payment():
 
     if qr_code:
         Order.save_qr_code(conn, order_id, qr_code)
+
+    # A different amount requires a fresh Alipay trade. Keep the old row for
+    # audit, but remove it from pending-order counts only after the replacement
+    # QR was created successfully. A late payment is still honored by the
+    # existing payment callback, which accepts expired orders.
+    if supersedes_order_id and supersedes_order_id != order_id:
+        if Order.supersede_pending_payment(conn, supersedes_order_id, user_id):
+            logging.info(
+                "[PAYMENT] Superseded pending order: old=%s, new=%s, user=%s",
+                supersedes_order_id, order_id, user_id,
+            )
 
     return jsonify({
         "success": True,

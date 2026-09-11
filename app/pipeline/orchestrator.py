@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import time
 from copy import deepcopy
 from typing import Dict, Optional
 
@@ -413,6 +414,7 @@ class RewriteOrchestrator:
         import config as project_config
         from app.pipeline.attribution_policy import (
             POLICY_VERSION,
+            SECOND_ROUND_MAX_SCORE,
             directives_for,
             feature_retry_guidance,
             feature_target_guidance,
@@ -462,11 +464,20 @@ class RewriteOrchestrator:
         current_analysis = analysis
         current_text = humanized
         rounds = 0
+        stop_reason = None
 
         for round_number in range(1, max_rounds + 1):
             current_score = _score(current_analysis)
             if current_score is None or float(current_score) < target:
+                stop_reason = "target_achieved"
                 break
+            if (
+                round_number > 1
+                and float(current_score) >= SECOND_ROUND_MAX_SCORE
+            ):
+                stop_reason = "second_round_score_ceiling"
+                break
+            round_started = time.perf_counter()
             block_texts = [items[index]["text"] for index in eligible_indexes]
             explanations = explain(block_texts, top=3)
             total_words = max(sum(row.get("word_count", 0) for row in explanations), 1)
@@ -486,6 +497,7 @@ class RewriteOrchestrator:
             candidates.sort(key=lambda value: value[0], reverse=True)
             selected = candidates[:batch_size]
             if not selected:
+                stop_reason = "no_eligible_blocks"
                 break
 
             rounds += 1
@@ -577,6 +589,9 @@ class RewriteOrchestrator:
                     "status": "validation_rejected",
                     "blocks": block_records, "score_before": current_score,
                     "score_after": current_score,
+                    "duration_ms": max(
+                        0, round((time.perf_counter() - round_started) * 1000)
+                    ),
                 })
                 continue
 
@@ -602,7 +617,7 @@ class RewriteOrchestrator:
                         "The previous revision was rejected because the full passage did not improve. Produce a materially different revision rather than repeating the same wording.",
                         "Apply the requested changes conservatively and prioritize every protected characteristic over stylistic polishing.",
                     ] + list(record.get("feature_retry_guidance") or [])
-            steps.append({
+            round_step = {
                 "scope": "targeted_batch", "pass": 2, "round": round_number,
                 "action": "attribution_llm", "rewrite_backend": self._label(llm),
                 "action_chain": ["llm"], "rewrite_backends": [self._label(llm)],
@@ -614,7 +629,8 @@ class RewriteOrchestrator:
                     if accepted else 0.0
                 ),
                 "blocks": block_records,
-            })
+            }
+            steps.append(round_step)
             if accepted:
                 updated_explanations = {
                     row["source_index"]: row
@@ -641,6 +657,16 @@ class RewriteOrchestrator:
                 items = candidate_items
                 current_text = candidate_text
                 current_analysis = candidate_analysis
+            round_step["duration_ms"] = max(
+                0, round((time.perf_counter() - round_started) * 1000)
+            )
+
+        if stop_reason is None:
+            stop_reason = (
+                "target_achieved"
+                if float(_score(current_analysis)) < target
+                else "max_rounds_reached"
+            )
 
         return {
             "humanized": current_text,
@@ -657,6 +683,8 @@ class RewriteOrchestrator:
                 "target": target,
                 "achieved": float(_score(current_analysis)) < target,
                 "attribution_policy_version": POLICY_VERSION,
+                "stop_reason": stop_reason,
+                "second_round_max_score": SECOND_ROUND_MAX_SCORE,
             },
         }
 

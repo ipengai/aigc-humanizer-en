@@ -6,6 +6,10 @@ import re
 
 
 POLICY_VERSION = "v3"
+# Production evidence on 2026-09-11 showed that a second targeted attempt only
+# rescued documents already close to the target. Above this score, the second
+# candidate added latency/cost without producing another <20% result.
+SECOND_ROUND_MAX_SCORE = 30.0
 
 DIRECTIVES = {
     "average_word_length": "Keep necessary technical terms, but simplify non-technical wording and prefer concrete verbs.",

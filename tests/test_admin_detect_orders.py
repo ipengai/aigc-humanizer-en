@@ -174,6 +174,8 @@ class AdminDetectionOrderTests(unittest.TestCase):
         self.assertIn('step.rewrite_backends', template)
         self.assertIn('targetedBackends', template)
         self.assertIn('定向二改：${targetedBackends}', template)
+        self.assertIn('step.duration_ms', template)
+        self.assertIn('second_round_score_ceiling', template)
 
 
 if __name__ == "__main__":

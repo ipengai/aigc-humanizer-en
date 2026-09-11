@@ -42,6 +42,8 @@ PAYMENT_ADAPTER = 'alipay'
 ALLOW_MOCK_PAYMENT = False
 ```
 
+`REWRITE_TARGETED_MAX_ROUNDS=2` 表示最多两轮；第 2 轮还有内置收益门槛，仅在第 1 轮结束后的当前最佳全文分数处于 `[20%, 30%)` 时执行。每轮耗时、候选分数和采用/回退状态均写入订单路由记录。
+
 建议显式设置 `REWRITE_HUMA_ADAPTER='ai_text_humanizer'`，让风险路由使用的 Huma 服务一眼可见。即使全局主改写器以后改成其他适配器，`>60%` 档也不会随之丢失 Huma provider。
 
 生产环境还必须具备有效的 `SECRET_KEY`、`AI_TEXT_HUMANIZER_EMAIL`、`AI_TEXT_HUMANIZER_PASSWORD`、`LLM_API_KEY` 以及支付宝正式环境配置。启用 `REWRITE_TRANSLATION_ADAPTER='lynote'` 时，百度或阿里云机器翻译至少有一组可用的生产凭证；未配置翻译 provider 时，20–60 档无法执行。V2 检测本身不需要 Sapling 或 Originality Key。

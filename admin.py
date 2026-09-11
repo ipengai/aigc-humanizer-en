@@ -1630,12 +1630,20 @@ DASHBOARD_TEMPLATE = """<!DOCTYPE html>
             }
             const targeted = steps.filter(step => step.scope === 'targeted_batch');
             if (targeted.length) {
-                const accepted = targeted.filter(step => step.status === 'accepted').length;
-                const reverted = targeted.length - accepted;
                 const targetedBackends = [...new Set(targeted
                     .flatMap(step => step.rewrite_backends || [step.rewrite_backend])
                     .filter(Boolean))].join(' → ') || 'llm';
-                parts.push(`定向二改：${targetedBackends} ${targeted.length}轮（采用${accepted}，回退${reverted}）`);
+                const roundDetails = targeted.map((step, index) => {
+                    const status = step.status === 'accepted' ? '采用' : '回退';
+                    const duration = step.duration_ms == null
+                        ? '' : ` ${(Number(step.duration_ms) / 1000).toFixed(1)}秒`;
+                    return `第${step.round || index + 1}轮${status}${duration}`;
+                });
+                const secondPass = trace?.route?.second_pass || {};
+                if (secondPass.stop_reason === 'second_round_score_ceiling') {
+                    roundDetails.push(`第2轮跳过（当前最佳≥${Number(secondPass.second_round_max_score || 30).toFixed(0)}%）`);
+                }
+                parts.push(`定向二改：${targetedBackends}（${roundDetails.join('，')}）`);
             }
             return parts.join('；') || order.humanizer_backend || '-';
         }

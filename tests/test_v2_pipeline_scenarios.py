@@ -420,13 +420,51 @@ class PipelineScenarioTests(unittest.TestCase):
             {"risk_percent": 32, "coverage": 1},
         )
 
-        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(len(llm.calls), 1)
         self.assertIsNone(llm.calls[0][4])
-        self.assertIn("materially different", llm.calls[1][4][0])
         self.assertEqual(result["humanized"], original)
         self.assertEqual(result["analysis"]["risk_percent"], 32)
         self.assertEqual(result["steps"][0]["status"], "rejected_no_improvement")
+        self.assertGreaterEqual(result["steps"][0]["duration_ms"], 0)
+        self.assertEqual(
+            result["summary"]["stop_reason"], "second_round_score_ceiling"
+        )
+        self.assertEqual(result["summary"]["second_round_max_score"], 30)
         self.assertEqual(result["summary"]["actual_gain"], 0)
+
+    def test_targeted_second_round_still_runs_below_score_ceiling(self):
+        class _TargetDetector:
+            def __call__(self, text, stage=None):
+                return {"backend": "v2", "risk_percent": 35, "coverage": 1}
+
+            def explain_blocks(self, texts, top=3):
+                return [{
+                    "source_index": 0,
+                    "word_count": len(texts[0].split()),
+                    "risk_percent": 40,
+                    "top_feature_groups": [{
+                        "feature_group": "function_word_ratio",
+                        "contribution_pp": 8,
+                    }],
+                    "text": texts[0],
+                }]
+
+        llm = _Provider("llm")
+        detector = _TargetDetector()
+        orchestrator = RewriteOrchestrator(
+            _Provider("huma"), detector, providers={"llm": llm}
+        )
+        original = "This ordinary block contains " + "word " * 55
+        result = orchestrator.run_targeted_second_pass(
+            original,
+            [{"text": original, "block_id": "b0", "was_rewritten": True}],
+            {"risk_percent": 29, "coverage": 1},
+        )
+
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(result["summary"]["rounds"], 2)
+        self.assertEqual(result["summary"]["stop_reason"], "max_rounds_reached")
+        self.assertTrue(all("duration_ms" in step for step in result["steps"]))
 
 
 class AnalyzeResponseScenarioTests(unittest.TestCase):
